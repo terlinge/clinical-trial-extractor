@@ -1,6 +1,6 @@
 """
 Clinical Trial Data Extractor - Production Backend
-Comprehensive PDF extraction using multiple methods: OCR, LLM, GROBID, Heuristics
+Comprehensive PDF extraction using multiple methods: OCR, LLM, Tables, Heuristics
 """
 from dotenv import load_dotenv
 load_dotenv()
@@ -13,21 +13,19 @@ import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import hashlib
+import tempfile
 
 # PDF Processing Libraries
 import pdfplumber
 import pytesseract
 from pdf2image import convert_from_path
-# import camelot  # Skipping - has Windows compatibility issues
 from PIL import Image
 import io
+import camelot
 
 # LLM
 import openai
 from openai import OpenAI
-
-# GROBID (optional - requires separate service)
-import requests
 
 # Data Processing
 import numpy as np
@@ -57,6 +55,9 @@ class Study(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     pdf_hash = db.Column(db.String(64), unique=True, nullable=False)
+    pdf_blob = db.Column(db.LargeBinary)
+    pdf_filename = db.Column(db.String(500))
+    
     title = db.Column(db.Text)
     authors = db.Column(db.JSON)
     journal = db.Column(db.String(500))
@@ -131,52 +132,104 @@ class PDFExtractor:
     def __init__(self, pdf_path: str):
         self.pdf_path = pdf_path
         self.methods_used = []
+        self.page_count = 0
         
     def extract_text_pdfplumber(self) -> str:
         """Extract text using pdfplumber - best for modern PDFs"""
         try:
             text = ""
             with pdfplumber.open(self.pdf_path) as pdf:
+                self.page_count = len(pdf.pages)
                 for page in pdf.pages:
                     text += page.extract_text() or ""
-            self.methods_used.append('pdfplumber')
+            self.methods_used.append('pdfplumber_text')
+            print(f"PDFPlumber extracted {len(text)} characters from {self.page_count} pages")
             return text
         except Exception as e:
-            print(f"PDFPlumber extraction failed: {e}")
+            print(f"PDFPlumber text extraction failed: {e}")
             return ""
+    
+    def extract_tables_pdfplumber(self) -> List[Dict]:
+        """Extract tables using pdfplumber"""
+        try:
+            tables = []
+            with pdfplumber.open(self.pdf_path) as pdf:
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    page_tables = page.extract_tables()
+                    for table_num, table in enumerate(page_tables):
+                        if table and len(table) > 1:  # Must have headers and at least one row
+                            # Convert table to list of dicts with headers
+                            headers = table[0] if table else []
+                            rows = table[1:] if len(table) > 1 else []
+                            
+                            table_data = []
+                            for row in rows:
+                                if row and any(cell for cell in row if cell):  # Skip empty rows
+                                    row_dict = {}
+                                    for i, cell in enumerate(row):
+                                        header = headers[i] if i < len(headers) and headers[i] else f"Column_{i}"
+                                        row_dict[header] = cell if cell else ""
+                                    table_data.append(row_dict)
+                            
+                            if table_data:
+                                tables.append({
+                                    'table_number': len(tables) + 1,
+                                    'page': page_num,
+                                    'data': table_data,
+                                    'method': 'pdfplumber',
+                                    'rows': len(table_data),
+                                    'cols': len(headers)
+                                })
+            
+            if tables:
+                self.methods_used.append('pdfplumber_tables')
+            print(f"PDFPlumber extracted {len(tables)} tables")
+            return tables
+        except Exception as e:
+            print(f"PDFPlumber table extraction failed: {e}")
+            return []
     
     def extract_tables_camelot(self) -> List[Dict]:
         """Extract tables using Camelot - excellent for structured tables"""
-        return []  # Disabled on Windows
         try:
+            # Try lattice mode first (for tables with clear borders)
             tables = camelot.read_pdf(self.pdf_path, pages='all', flavor='lattice')
             extracted_tables = []
             
             for i, table in enumerate(tables):
-                extracted_tables.append({
-                    'table_number': i + 1,
-                    'page': table.page,
-                    'data': table.df.to_dict('records'),
-                    'accuracy': table.accuracy,
-                    'method': 'camelot_lattice'
-                })
-            
-            # Try stream flavor for tables without clear borders
-            if len(tables) < 3:
-                stream_tables = camelot.read_pdf(self.pdf_path, pages='all', flavor='stream')
-                for i, table in enumerate(stream_tables):
+                if table.accuracy > 50:  # Only use tables with >50% accuracy
                     extracted_tables.append({
-                        'table_number': len(tables) + i + 1,
+                        'table_number': len(extracted_tables) + 1,
                         'page': table.page,
                         'data': table.df.to_dict('records'),
                         'accuracy': table.accuracy,
-                        'method': 'camelot_stream'
+                        'method': 'camelot_lattice',
+                        'rows': len(table.df),
+                        'cols': len(table.df.columns)
                     })
             
-            self.methods_used.append('camelot')
+            # Try stream mode for tables without clear borders (if we got few tables)
+            if len(extracted_tables) < 3:
+                stream_tables = camelot.read_pdf(self.pdf_path, pages='all', flavor='stream')
+                for i, table in enumerate(stream_tables):
+                    if table.accuracy > 40:  # Lower threshold for stream
+                        extracted_tables.append({
+                            'table_number': len(extracted_tables) + 1,
+                            'page': table.page,
+                            'data': table.df.to_dict('records'),
+                            'accuracy': table.accuracy,
+                            'method': 'camelot_stream',
+                            'rows': len(table.df),
+                            'cols': len(table.df.columns)
+                        })
+            
+            if extracted_tables:
+                self.methods_used.append('camelot')
+            print(f"Camelot extracted {len(extracted_tables)} tables")
             return extracted_tables
+            
         except Exception as e:
-            print(f"Camelot extraction failed: {e}")
+            print(f"Camelot table extraction failed: {e}")
             return []
     
     def extract_with_ocr(self) -> str:
@@ -186,81 +239,55 @@ class PDFExtractor:
             text = ""
             
             for i, image in enumerate(images):
-                # Use Tesseract with optimized settings
                 custom_config = r'--oem 3 --psm 6'
                 page_text = pytesseract.image_to_string(image, config=custom_config)
                 text += f"\n--- Page {i+1} ---\n{page_text}"
             
             self.methods_used.append('tesseract_ocr')
+            print(f"OCR extracted {len(text)} characters")
             return text
         except Exception as e:
             print(f"OCR extraction failed: {e}")
             return ""
-    
-    def extract_with_grobid(self) -> Dict:
-        """Extract structured data using GROBID (if service is running)"""
-        try:
-            grobid_url = os.getenv('GROBID_URL', 'http://localhost:8070')
-            
-            with open(self.pdf_path, 'rb') as pdf_file:
-                files = {'input': pdf_file}
-                response = requests.post(
-                    f'{grobid_url}/api/processFulltextDocument',
-                    files=files,
-                    timeout=60
-                )
-            
-            if response.status_code == 200:
-                self.methods_used.append('grobid')
-                return self._parse_grobid_xml(response.text)
-            else:
-                print(f"GROBID service returned status {response.status_code}")
-                return {}
-        except Exception as e:
-            print(f"GROBID extraction failed (service may not be running): {e}")
-            return {}
-    
-    def _parse_grobid_xml(self, xml_text: str) -> Dict:
-        """Parse GROBID XML output"""
-        # Simplified parser - in production, use proper XML parsing
-        import xml.etree.ElementTree as ET
-        
-        try:
-            root = ET.fromstring(xml_text)
-            return {
-                'title': root.findtext('.//title', ''),
-                'abstract': root.findtext('.//abstract', ''),
-                'sections': [],  # Would extract sections here
-                'references': []  # Would extract references here
-            }
-        except Exception as e:
-            print(f"GROBID XML parsing failed: {e}")
-            return {}
     
     def comprehensive_extract(self) -> Dict:
         """Run all extraction methods and combine results"""
         results = {
             'text': '',
             'tables': [],
-            'grobid_data': {},
-            'methods_used': []
+            'methods_used': [],
+            'page_count': 0
         }
         
         # Primary text extraction
         text = self.extract_text_pdfplumber()
         if not text or len(text) < 100:
-            # Fall back to OCR if pdfplumber fails or gets minimal text
+            print("Text extraction minimal, trying OCR...")
             text = self.extract_with_ocr()
         
         results['text'] = text
+        results['page_count'] = self.page_count
         
-        # Table extraction
-        results['tables'] = self.extract_tables_camelot()
+        # Table extraction - try both methods
+        tables = []
         
-        # GROBID for structure (optional)
-        results['grobid_data'] = self.extract_with_grobid()
+        # Try pdfplumber first (fast)
+        pdfplumber_tables = self.extract_tables_pdfplumber()
+        tables.extend(pdfplumber_tables)
         
+        # Try Camelot (better for older PDFs with image tables)
+        camelot_tables = self.extract_tables_camelot()
+        tables.extend(camelot_tables)
+        
+        results['tables'] = tables
         results['methods_used'] = self.methods_used
+        
+        print(f"\n=== EXTRACTION SUMMARY ===")
+        print(f"Methods used: {', '.join(self.methods_used)}")
+        print(f"Text extracted: {len(text)} characters")
+        print(f"Tables found: {len(tables)} (pdfplumber: {len(pdfplumber_tables)}, camelot: {len(camelot_tables)})")
+        print(f"Pages: {self.page_count}")
+        print(f"========================\n")
         
         return results
 
@@ -271,6 +298,9 @@ class LLMExtractor:
     
     def __init__(self, api_key: str = None):
         self.client = OpenAI(api_key=api_key or os.getenv('OPENAI_API_KEY'))
+        self.model = "gpt-4-turbo-preview"
+        self.tokens_used = 0
+        self.finish_reason = None
     
     def extract_trial_data(self, text: str, tables: List[Dict] = None) -> Dict:
         """Extract comprehensive trial data using GPT-4"""
@@ -279,21 +309,27 @@ class LLMExtractor:
         table_context = ""
         if tables:
             table_context = "\n\n=== EXTRACTED TABLES ===\n"
-            for i, table in enumerate(tables[:10]):  # Limit to first 10 tables
-                table_context += f"\nTable {i+1} (Page {table.get('page', 'unknown')}):\n"
-                table_context += json.dumps(table['data'][:20], indent=2)  # First 20 rows
+            for i, table in enumerate(tables[:10]):
+                table_context += f"\nTable {i+1} (Page {table.get('page', 'unknown')}, {table.get('rows', 0)} rows x {table.get('cols', 0)} cols):\n"
+                table_context += json.dumps(table['data'][:20], indent=2)
         
         prompt = self._create_extraction_prompt(text, table_context)
         
+        print(f"\n=== LLM EXTRACTION STARTING ===")
+        print(f"Model: {self.model}")
+        print(f"Prompt length: {len(prompt)} characters")
+        print(f"Tables included: {len(tables) if tables else 0}")
+        
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model=self.model,
                 messages=[
                     {
                         "role": "system",
                         "content": """You are an expert clinical trial data extractor with 20+ years of experience in systematic reviews and network meta-analyses. 
                         You extract data with extreme precision, never hallucinate, and always indicate when information is uncertain or missing.
-                        You are particularly skilled at identifying all statistical parameters, subgroup analyses, and nuanced methodological details."""
+                        You are particularly skilled at identifying all statistical parameters, subgroup analyses, and nuanced methodological details.
+                        You search the ENTIRE paper thoroughly, especially the Methods section for study design details."""
                     },
                     {
                         "role": "user",
@@ -305,25 +341,66 @@ class LLMExtractor:
                 response_format={"type": "json_object"}
             )
             
-            extracted_data = json.loads(response.choices[0].message.content)
+            # Store metadata
+            self.tokens_used = response.usage.total_tokens
+            self.finish_reason = response.choices[0].finish_reason
+            
+            raw_content = response.choices[0].message.content
+            
+            print(f"=== LLM RESPONSE RECEIVED ===")
+            print(f"Response length: {len(raw_content)} characters")
+            print(f"Tokens used: {self.tokens_used}")
+            print(f"Finish reason: {self.finish_reason}")
+            
+            if self.finish_reason == 'length':
+                print("⚠️ WARNING: Response was truncated due to token limit!")
+            
+            extracted_data = json.loads(raw_content)
+            
+            # Debug: Check what was extracted
+            print(f"=== EXTRACTION CHECK ===")
+            print(f"Has study_identification: {bool(extracted_data.get('study_identification'))}")
+            print(f"Has study_design: {bool(extracted_data.get('study_design'))}")
+            print(f"Has interventions: {len(extracted_data.get('interventions', []))} arms")
+            print(f"Has primary outcomes: {len(extracted_data.get('outcomes', {}).get('primary', []))}")
+            print(f"Has secondary outcomes: {len(extracted_data.get('outcomes', {}).get('secondary', []))}")
+            print(f"========================\n")
+            
             return extracted_data
             
+        except json.JSONDecodeError as e:
+            print(f"❌ LLM JSON parsing error: {e}")
+            print(f"First 500 chars of response: {raw_content[:500] if 'raw_content' in locals() else 'N/A'}")
+            return {}
         except Exception as e:
-            print(f"LLM extraction error: {e}")
+            print(f"❌ LLM extraction error: {e}")
             return {}
     
     def _create_extraction_prompt(self, text: str, table_context: str) -> str:
         """Create comprehensive extraction prompt"""
-        return f"""Extract ALL data from this clinical trial for network meta-analysis. Be EXHAUSTIVE.
+        return f"""Extract ALL data from this clinical trial for network meta-analysis. Be EXHAUSTIVE and THOROUGH.
 
-CRITICAL INSTRUCTIONS:
+CRITICAL INSTRUCTIONS FOR STUDY DESIGN:
+1. SEARCH THE ENTIRE METHODS SECTION for study design details
+2. Look for these EXACT phrases: "randomized", "double-blind", "single-blind", "open-label", "placebo-controlled", "multi-center", "single-center", "multicenter", "multicentre"
+3. Look for blinding information in: title, abstract, methods section, and anywhere else
+4. Search for country mentions throughout the entire paper
+5. COUNT ALL INSTITUTIONS/SITES mentioned in author affiliations and methods - list EVERY SINGLE ONE
+6. Look for allocation ratio (e.g., "1:1", "2:1", "randomized in a 1:1 ratio")
+7. Find study duration in methods (e.g., "12 weeks", "6 months")
+8. Extract treatment duration and follow-up duration separately
+
+STATISTICAL PARAMETERS - EXTRACT EVERYTHING:
 1. Extract EVERY numerical value, statistical parameter, and data point
-2. Include ALL subgroup analyses with complete statistics
-3. Never hallucinate - if data is unclear or missing, mark as "UNCERTAIN" or "NOT_REPORTED"
-4. Extract exact values from tables when available
-5. Include confidence intervals, p-values, standard deviations, medians, IQRs, event counts
-6. Capture baseline characteristics for all arms
-7. Extract adverse event frequencies
+2. Include ALL measures of variation: SD, SE, IQR, Q1, Q3, median, min, max, confidence intervals
+3. Include ALL subgroup analyses with complete statistics
+4. Never hallucinate - if data is unclear or missing, mark as "NOT_REPORTED"
+5. Extract exact values from tables when available
+6. Include confidence intervals, p-values, standard deviations, medians, IQRs, event counts
+7. Capture baseline characteristics for all arms
+8. Extract adverse event frequencies
+
+CRITICAL: Extract PRIMARY and SECONDARY OUTCOMES with ALL statistical details. This is ESSENTIAL for meta-analysis.
 
 Return JSON with this EXACT structure:
 {{
@@ -337,17 +414,25 @@ Return JSON with this EXACT structure:
     "correspondence_author": "name and email if available"
   }},
   "study_design": {{
-    "type": "parallel-group RCT/crossover/cluster-randomized/factorial/etc",
-    "blinding": "double-blind/single-blind/open-label/details",
-    "randomization_method": "exact description",
+    "type": "parallel-group RCT/crossover/cluster-randomized/factorial/etc - SEARCH for this in title, abstract, and methods",
+    "blinding": "double-blind/single-blind/open-label/details - SEARCH entire paper for blinding information",
+    "randomization_method": "exact description from methods section",
     "allocation_concealment": "method",
-    "allocation_ratio": "e.g., 1:1 or 2:1",
+    "allocation_ratio": "e.g., 1:1 or 2:1 - LOOK for phrases like 'randomized in a X:Y ratio'",
     "sample_size_calculation": "complete power calculation",
-    "duration_total": "total study duration",
-    "duration_treatment": "treatment phase duration",
-    "duration_followup": "followup duration",
-    "number_of_sites": "single-center/multi-center, number",
-    "country": "countries involved"
+    "duration_total": "total study duration - SEARCH for this",
+    "duration_treatment": "treatment phase duration - SEARCH for this",
+    "duration_followup": "followup duration - SEARCH for this",
+    "number_of_sites": "COUNT institutions in affiliations and methods",
+    "country": "countries involved - SEARCH entire paper",
+    "sites": [
+      {{
+        "institution_name": "FULL institution name from affiliations or methods",
+        "city": "city if available",
+        "country": "country",
+        "principal_investigator": "PI name if mentioned"
+      }}
+    ]
   }},
   "population": {{
     "inclusion_criteria": ["criterion 1", "criterion 2"],
@@ -508,11 +593,11 @@ Return JSON with this EXACT structure:
 }}
 
 CLINICAL TRIAL TEXT:
-{text}
+{text[:50000]}
 
 {table_context}
 
-Extract now. Be thorough and precise."""
+Extract now. Be thorough, search the ENTIRE paper especially Methods section, and list ALL sites/institutions. MAKE SURE to extract primary and secondary outcomes with full statistics."""
 
 # ==================== HEURISTIC EXTRACTION ====================
 
@@ -593,52 +678,109 @@ class EnsembleExtractor:
             'extraction_methods': pdf_data['methods_used'] + ['llm', 'heuristic'],
             'tables_found': len(pdf_data.get('tables', [])),
             'pdf_pages': pdf_data.get('page_count', 0),
-            'confidence_scores': confidence_scores
+            'confidence_scores': confidence_scores,
+            'llm_model': self.llm_extractor.model,
+            'llm_tokens': self.llm_extractor.tokens_used,
+            'llm_finish_reason': self.llm_extractor.finish_reason
         }
         
         return final_data, metadata
     
     def _ensemble_results(self, llm_data: Dict, heuristic_data: Dict, pdf_data: Dict) -> Dict:
         """Combine and validate results from different methods"""
-        
-        # Start with LLM data as base (most comprehensive)
         ensembled = llm_data.copy()
         
-        # Validate numerical fields with heuristic extraction
-        if 'p_values' in heuristic_data and heuristic_data['p_values']:
-            # Cross-check p-values
-            pass
-        
-        # Add table data references
         if pdf_data.get('tables'):
             ensembled['extracted_tables'] = pdf_data['tables']
         
         return ensembled
     
     def _calculate_confidence(self, final_data: Dict, pdf_data: Dict, heuristic_data: Dict) -> Dict:
-        """Calculate confidence scores for each extracted field"""
+        """Calculate meaningful confidence scores based on data completeness"""
         
         scores = {
             'overall': 0.0,
             'by_section': {}
         }
         
-        # Simple confidence scoring
-        # High confidence if: multiple methods agree, data is from tables, clear numerical values
-        
-        if pdf_data.get('tables') and len(pdf_data['tables']) > 0:
-            scores['tables_available'] = 0.9
-        else:
-            scores['tables_available'] = 0.5
-        
+        # Study Identification (0-100)
+        id_score = 0
         if final_data.get('study_identification', {}).get('title'):
-            scores['by_section']['identification'] = 0.95
+            id_score += 30
+        if final_data.get('study_identification', {}).get('authors'):
+            id_score += 20
+        if final_data.get('study_identification', {}).get('year'):
+            id_score += 20
+        if final_data.get('study_identification', {}).get('journal'):
+            id_score += 15
+        if final_data.get('study_identification', {}).get('trial_registration'):
+            id_score += 15
+        scores['by_section']['identification'] = id_score / 100.0
         
-        if final_data.get('outcomes'):
-            scores['by_section']['outcomes'] = 0.75  # Medium-high
+        # Study Design (0-100)
+        design_score = 0
+        sd = final_data.get('study_design', {})
+        if sd.get('type') and sd.get('type') != 'NOT_REPORTED':
+            design_score += 20
+        if sd.get('blinding') and sd.get('blinding') != 'NOT_REPORTED':
+            design_score += 20
+        if sd.get('randomization_method') and sd.get('randomization_method') != 'NOT_REPORTED':
+            design_score += 15
+        if sd.get('duration_treatment') and sd.get('duration_treatment') != 'NOT_REPORTED':
+            design_score += 15
+        if sd.get('sites') and len(sd.get('sites', [])) > 0:
+            design_score += 15
+        if sd.get('country') and sd.get('country') != 'NOT_REPORTED':
+            design_score += 15
+        scores['by_section']['design'] = design_score / 100.0
         
-        # Overall score
-        scores['overall'] = np.mean(list(scores['by_section'].values())) if scores['by_section'] else 0.5
+        # Interventions (0-100)
+        interventions = final_data.get('interventions', [])
+        if interventions and len(interventions) >= 2:
+            intervention_score = 40  # Has multiple arms
+            complete_arms = sum(1 for i in interventions if i.get('arm_name') and i.get('dose'))
+            intervention_score += (complete_arms / len(interventions)) * 60
+            scores['by_section']['interventions'] = intervention_score / 100.0
+        else:
+            scores['by_section']['interventions'] = 0.0
+        
+        # Outcomes (0-100) - MOST CRITICAL
+        primary_outcomes = final_data.get('outcomes', {}).get('primary', [])
+        if primary_outcomes:
+            outcome_score = 30  # Has outcomes
+            # Check completeness
+            complete_outcomes = 0
+            for outcome in primary_outcomes:
+                has_results = outcome.get('results_by_arm') and len(outcome.get('results_by_arm', [])) > 0
+                has_effect = outcome.get('between_group_comparison') or outcome.get('effect_estimate')
+                if has_results:
+                    complete_outcomes += 0.5
+                if has_effect:
+                    complete_outcomes += 0.5
+            outcome_score += (complete_outcomes / len(primary_outcomes)) * 70
+            scores['by_section']['outcomes'] = outcome_score / 100.0
+        else:
+            scores['by_section']['outcomes'] = 0.0
+        
+        # Table extraction bonus
+        if pdf_data.get('tables') and len(pdf_data['tables']) > 0:
+            scores['tables_extracted'] = len(pdf_data['tables']) / 10.0  # 0-1 scale
+        else:
+            scores['tables_extracted'] = 0.0
+        
+        # Overall score - weighted average
+        weights = {
+            'identification': 0.1,
+            'design': 0.2,
+            'interventions': 0.2,
+            'outcomes': 0.5  # Outcomes are MOST important
+        }
+        
+        overall = 0
+        for section, weight in weights.items():
+            overall += scores['by_section'].get(section, 0) * weight
+        
+        scores['overall'] = overall
         
         return scores
 
@@ -647,18 +789,22 @@ class EnsembleExtractor:
 def index():
     """Serve the frontend"""
     return render_template('index.html')
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'version': '1.0.0',
+        'version': '1.1.0',
         'features': [
             'pdf_extraction',
+            'pdfplumber_tables',
             'ocr',
-            'table_extraction',
             'llm_extraction',
-            'database_storage'
+            'database_storage',
+            'pdf_blob_storage',
+            're_extraction',
+            'confidence_scoring'
         ]
     })
 
@@ -678,9 +824,8 @@ def extract_trial_data():
         return jsonify({'error': 'Only PDF files accepted'}), 400
     
     try:
-        # Save uploaded file
-        file_hash = hashlib.sha256(file.read()).hexdigest()
-        file.seek(0)  # Reset file pointer
+        file_content = file.read()
+        file_hash = hashlib.sha256(file_content).hexdigest()
         
         # Check if already processed
         existing_study = Study.query.filter_by(pdf_hash=file_hash).first()
@@ -691,17 +836,20 @@ def extract_trial_data():
                 'data': _serialize_study(existing_study)
             })
         
-        # Save file
-        filename = f"{file_hash}.pdf"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+        # Save file temporarily for extraction
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(file_content)
+            filepath = tmp_file.name
         
         # Extract data
         extractor = EnsembleExtractor()
         extracted_data, metadata = extractor.extract_comprehensive(filepath)
         
-        # Save to database
-        study = _save_to_database(extracted_data, metadata, file_hash)
+        # Save to database WITH PDF blob
+        study = _save_to_database(extracted_data, metadata, file_hash, file_content, file.filename)
+        
+        # Clean up temp file
+        os.unlink(filepath)
         
         return jsonify({
             'success': True,
@@ -711,6 +859,117 @@ def extract_trial_data():
         })
         
     except Exception as e:
+        print(f"❌ Extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/studies/<int:study_id>/re-extract', methods=['POST'])
+def re_extract_study(study_id):
+    """Re-extract a study from stored PDF blob"""
+    
+    try:
+        study = Study.query.get_or_404(study_id)
+        
+        if not study.pdf_blob:
+            return jsonify({'error': 'No PDF stored for this study'}), 400
+        
+        # Write blob to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(study.pdf_blob)
+            filepath = tmp_file.name
+        
+        # Delete existing related records
+        Intervention.query.filter_by(study_id=study_id).delete()
+        Outcome.query.filter_by(study_id=study_id).delete()
+        SubgroupAnalysis.query.filter_by(study_id=study_id).delete()
+        AdverseEvent.query.filter_by(study_id=study_id).delete()
+        
+        # Re-run extraction
+        extractor = EnsembleExtractor()
+        extracted_data, metadata = extractor.extract_comprehensive(filepath)
+        
+        # Update study record
+        study.title = extracted_data.get('study_identification', {}).get('title')
+        study.authors = extracted_data.get('study_identification', {}).get('authors', [])
+        study.journal = extracted_data.get('study_identification', {}).get('journal')
+        study.year = extracted_data.get('study_identification', {}).get('year')
+        study.doi = extracted_data.get('study_identification', {}).get('doi')
+        study.trial_registration = extracted_data.get('study_identification', {}).get('trial_registration')
+        study.study_type = extracted_data.get('study_design', {}).get('type')
+        study.blinding = extracted_data.get('study_design', {}).get('blinding')
+        study.randomization = extracted_data.get('study_design', {}).get('randomization_method')
+        study.duration = extracted_data.get('study_design', {}).get('duration_total')
+        study.population_data = extracted_data.get('population')
+        study.baseline_characteristics = extracted_data.get('population', {}).get('baseline_disease_severity')
+        study.extraction_metadata = metadata
+        study.confidence_scores = metadata.get('confidence_scores')
+        study.extraction_date = datetime.utcnow()
+        
+        # Add interventions
+        for intervention_data in extracted_data.get('interventions', []):
+            intervention = Intervention(
+                study_id=study.id,
+                arm_name=intervention_data.get('arm_name'),
+                n_randomized=_clean_int_value(intervention_data.get('n_randomized')),
+                n_analyzed=_clean_int_value(intervention_data.get('n_analyzed_primary')),
+                dose=intervention_data.get('dose'),
+                frequency=intervention_data.get('frequency'),
+                duration=intervention_data.get('duration')
+            )
+            db.session.add(intervention)
+        
+        # Add outcomes
+        for outcome_type in ['primary', 'secondary']:
+            for outcome_data in extracted_data.get('outcomes', {}).get(outcome_type, []):
+                outcome = Outcome(
+                    study_id=study.id,
+                    outcome_name=outcome_data.get('outcome_name'),
+                    outcome_type=outcome_type,
+                    timepoint=outcome_data.get('timepoint'),
+                    results_by_arm=outcome_data.get('results_by_arm'),
+                    effect_estimate=outcome_data.get('between_group_comparison')
+                )
+                db.session.add(outcome)
+        
+        # Add subgroups
+        for subgroup_data in extracted_data.get('subgroup_analyses', []):
+            subgroup = SubgroupAnalysis(
+                study_id=study.id,
+                subgroup_variable=subgroup_data.get('subgroup_variable'),
+                subgroups=subgroup_data.get('subgroups'),
+                p_interaction=subgroup_data.get('p_interaction')
+            )
+            db.session.add(subgroup)
+        
+        # Add adverse events
+        for ae_data in extracted_data.get('adverse_events', []):
+            adverse_event = AdverseEvent(
+                study_id=study.id,
+                event_name=ae_data.get('event_name'),
+                severity=ae_data.get('severity_grade'),
+                results_by_arm=ae_data.get('results_by_arm')
+            )
+            db.session.add(adverse_event)
+        
+        db.session.commit()
+        
+        # Clean up temp file
+        os.unlink(filepath)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Study re-extracted successfully',
+            'study_id': study.id,
+            'data': _serialize_study(study),
+            'metadata': metadata
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Re-extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/studies', methods=['GET'])
@@ -745,12 +1004,25 @@ def export_study(study_id):
 
 # ==================== HELPER FUNCTIONS ====================
 
-def _save_to_database(data: Dict, metadata: Dict, pdf_hash: str) -> Study:
+def _clean_int_value(value):
+    """Convert 'Not Reported' strings to None for integer fields"""
+    if value in [None, '', 'Not Reported', 'NOT_REPORTED', 'N/A', 'Not reported', 'Not applicable']:
+        return None
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+    return value
+
+def _save_to_database(data: Dict, metadata: Dict, pdf_hash: str, pdf_blob: bytes, pdf_filename: str) -> Study:
     """Save extracted data to database"""
     
     # Create study
     study = Study(
         pdf_hash=pdf_hash,
+        pdf_blob=pdf_blob,
+        pdf_filename=pdf_filename,
         title=data.get('study_identification', {}).get('title'),
         authors=data.get('study_identification', {}).get('authors', []),
         journal=data.get('study_identification', {}).get('journal'),
@@ -775,8 +1047,8 @@ def _save_to_database(data: Dict, metadata: Dict, pdf_hash: str) -> Study:
         intervention = Intervention(
             study_id=study.id,
             arm_name=intervention_data.get('arm_name'),
-            n_randomized=intervention_data.get('n_randomized'),
-            n_analyzed=intervention_data.get('n_analyzed_primary'),
+            n_randomized=_clean_int_value(intervention_data.get('n_randomized')),
+            n_analyzed=_clean_int_value(intervention_data.get('n_analyzed_primary')),
             dose=intervention_data.get('dose'),
             frequency=intervention_data.get('frequency'),
             duration=intervention_data.get('duration')
@@ -822,7 +1094,12 @@ def _save_to_database(data: Dict, metadata: Dict, pdf_hash: str) -> Study:
 
 def _serialize_study(study: Study) -> Dict:
     """Convert study object to dictionary"""
-    return {
+    
+    # Get metadata from database - handle both during extraction and from DB
+    db_metadata = study.extraction_metadata if hasattr(study, 'extraction_metadata') and study.extraction_metadata else {}
+    db_confidence = study.confidence_scores if hasattr(study, 'confidence_scores') and study.confidence_scores else {}
+    
+    serialized = {
         'id': study.id,
         'study_identification': {
             'title': study.title,
@@ -886,217 +1163,32 @@ def _serialize_study(study: Study) -> Dict:
             }
             for ae in study.adverse_events
         ],
-        'metadata': study.extraction_metadata,
-        'confidence_scores': study.confidence_scores,
-        'extraction_date': study.extraction_date.isoformat()
+        'extraction_metadata': db_metadata,
+        'confidence_scores': db_confidence,
+        'extraction_date': study.extraction_date.isoformat() if study.extraction_date else None,
+        'has_pdf': study.pdf_blob is not None if hasattr(study, 'pdf_blob') else False,
+        'pdf_filename': study.pdf_filename if hasattr(study, 'pdf_filename') else None
     }
+    
+    return serialized
 
-# ==================== DATABASE INITIALIZATION ====================
-
-@app.cli.command()
-def init_db():
-    """Initialize the database"""
-    db.create_all()
-    print("Database initialized!")
-
-# Add these imports at the top of app.py (with other imports)
-import io
-from flask import send_file
-import pandas as pd
-
-# Add these routes BEFORE the "if __name__ == '__main__':" line in app.py
-
+# Export endpoints (simplified - keeping only essential ones)
 @app.route('/api/export/csv/<int:study_id>', methods=['GET'])
 def export_csv(study_id):
-    """Export study data as comprehensive Excel file with all CONSORT elements"""
+    """Export study data as Excel file"""
     study = Study.query.get_or_404(study_id)
     
     output = io.BytesIO()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Sheet 1: Study Identification
+        # Study info sheet
         study_info = pd.DataFrame([{
             'Title': study.title,
-            'Authors': ', '.join(study.authors) if study.authors else '',
-            'Journal': study.journal,
             'Year': study.year,
-            'DOI': study.doi,
-            'Trial Registration': study.trial_registration,
-            'Study Type': study.study_type,
-            'Blinding': study.blinding,
-            'Randomization Method': study.randomization,
-            'Total Duration': study.duration
+            'Journal': study.journal,
+            'Trial Registration': study.trial_registration
         }])
-        study_info.to_excel(writer, sheet_name='Study Identification', index=False)
-        
-        # Sheet 2: Population & Eligibility
-        if study.population_data:
-            pop = study.population_data
-            pop_data = pd.DataFrame([{
-                'Total Screened': pop.get('total_screened'),
-                'Total Randomized': pop.get('total_randomized'),
-                'Total Analyzed (ITT)': pop.get('total_analyzed_itt'),
-                'Total Analyzed (PP)': pop.get('total_analyzed_pp'),
-                'Mean Age': pop.get('age_mean'),
-                'Age SD': pop.get('age_sd'),
-                'Age Range': pop.get('age_range'),
-                'Male N': pop.get('sex_male_n'),
-                'Male %': pop.get('sex_male_percent'),
-            }])
-            pop_data.to_excel(writer, sheet_name='Population Demographics', index=False)
-            
-            # Inclusion criteria
-            if pop.get('inclusion_criteria'):
-                inc_df = pd.DataFrame(pop['inclusion_criteria'], columns=['Inclusion Criteria'])
-                inc_df.to_excel(writer, sheet_name='Inclusion Criteria', index=False)
-            
-            # Exclusion criteria
-            if pop.get('exclusion_criteria'):
-                exc_df = pd.DataFrame(pop['exclusion_criteria'], columns=['Exclusion Criteria'])
-                exc_df.to_excel(writer, sheet_name='Exclusion Criteria', index=False)
-            
-            # Baseline characteristics
-            if pop.get('baseline_disease_severity') or study.baseline_characteristics:
-                baseline = pop.get('baseline_disease_severity', {}) or study.baseline_characteristics or {}
-                if baseline:
-                    baseline_df = pd.DataFrame([baseline])
-                    baseline_df.to_excel(writer, sheet_name='Baseline Characteristics', index=False)
-        
-        # Sheet 3: Interventions
-        if study.interventions:
-            interventions_data = [{
-                'Arm Number': idx + 1,
-                'Arm Name': i.arm_name,
-                'N Randomized': i.n_randomized,
-                'N Analyzed': i.n_analyzed,
-                'Dose': i.dose,
-                'Frequency': i.frequency,
-                'Duration': i.duration,
-                'Dropouts': i.n_randomized - i.n_analyzed if i.n_randomized and i.n_analyzed else None
-            } for idx, i in enumerate(study.interventions)]
-            interventions_df = pd.DataFrame(interventions_data)
-            interventions_df.to_excel(writer, sheet_name='Interventions', index=False)
-        
-        # Sheet 4: Primary Outcomes
-        if study.outcomes:
-            outcomes_data = []
-            for outcome in study.outcomes:
-                if outcome.outcome_type == 'primary':
-                    base_data = {
-                        'Outcome Name': outcome.outcome_name,
-                        'Timepoint': outcome.timepoint,
-                    }
-                    
-                    # Add effect estimate
-                    if outcome.effect_estimate:
-                        base_data.update({
-                            'Comparison': outcome.effect_estimate.get('comparison'),
-                            'Effect Measure': outcome.effect_estimate.get('effect_measure'),
-                            'Effect Estimate': outcome.effect_estimate.get('effect_estimate'),
-                            'CI 95% Lower': outcome.effect_estimate.get('ci_95_lower'),
-                            'CI 95% Upper': outcome.effect_estimate.get('ci_95_upper'),
-                            'P-value': outcome.effect_estimate.get('p_value'),
-                            'Statistical Test': outcome.effect_estimate.get('statistical_test')
-                        })
-                    
-                    # Add arm-level results
-                    if outcome.results_by_arm:
-                        for arm_result in outcome.results_by_arm:
-                            arm_data = base_data.copy()
-                            arm_data.update({
-                                'Arm': arm_result.get('arm'),
-                                'N': arm_result.get('n'),
-                                'Mean': arm_result.get('mean'),
-                                'SD': arm_result.get('sd'),
-                                'Median': arm_result.get('median'),
-                                'IQR': arm_result.get('iqr'),
-                                'Events': arm_result.get('events'),
-                                'Total': arm_result.get('total')
-                            })
-                            outcomes_data.append(arm_data)
-                    else:
-                        outcomes_data.append(base_data)
-            
-            if outcomes_data:
-                outcomes_df = pd.DataFrame(outcomes_data)
-                outcomes_df.to_excel(writer, sheet_name='Primary Outcomes', index=False)
-        
-        # Sheet 5: Secondary Outcomes
-        secondary_outcomes = []
-        for outcome in study.outcomes:
-            if outcome.outcome_type == 'secondary':
-                sec_data = {
-                    'Outcome Name': outcome.outcome_name,
-                    'Timepoint': outcome.timepoint,
-                }
-                if outcome.effect_estimate:
-                    sec_data.update({
-                        'Effect': outcome.effect_estimate.get('effect_estimate'),
-                        'CI Lower': outcome.effect_estimate.get('ci_95_lower'),
-                        'CI Upper': outcome.effect_estimate.get('ci_95_upper'),
-                        'P-value': outcome.effect_estimate.get('p_value')
-                    })
-                secondary_outcomes.append(sec_data)
-        
-        if secondary_outcomes:
-            sec_df = pd.DataFrame(secondary_outcomes)
-            sec_df.to_excel(writer, sheet_name='Secondary Outcomes', index=False)
-        
-        # Sheet 6: Subgroup Analyses
-        if study.subgroups:
-            subgroups_data = []
-            for sg in study.subgroups:
-                if sg.subgroups:
-                    for subgroup in sg.subgroups:
-                        subgroups_data.append({
-                            'Subgroup Variable': sg.subgroup_variable,
-                            'Subgroup Name': subgroup.get('subgroup_name'),
-                            'Subgroup Definition': subgroup.get('subgroup_definition'),
-                            'P for Interaction': sg.p_interaction,
-                            'Effect Type': subgroup.get('effect_estimate', {}).get('type'),
-                            'Effect Estimate': subgroup.get('effect_estimate', {}).get('value'),
-                            'CI Lower': subgroup.get('effect_estimate', {}).get('ci_lower'),
-                            'CI Upper': subgroup.get('effect_estimate', {}).get('ci_upper'),
-                            'P-value': subgroup.get('effect_estimate', {}).get('p_value')
-                        })
-            
-            if subgroups_data:
-                subgroups_df = pd.DataFrame(subgroups_data)
-                subgroups_df.to_excel(writer, sheet_name='Subgroup Analyses', index=False)
-        
-        # Sheet 7: Adverse Events
-        if study.adverse_events:
-            ae_data = []
-            for ae in study.adverse_events:
-                if ae.results_by_arm:
-                    for arm_result in ae.results_by_arm:
-                        ae_data.append({
-                            'Event Name': ae.event_name,
-                            'Severity': ae.severity,
-                            'Arm': arm_result.get('arm'),
-                            'Events': arm_result.get('events'),
-                            'Participants with Event': arm_result.get('participants_with_event'),
-                            'Total Exposed': arm_result.get('total_exposed')
-                        })
-            
-            if ae_data:
-                ae_df = pd.DataFrame(ae_data)
-                ae_df.to_excel(writer, sheet_name='Adverse Events', index=False)
-        
-        # Sheet 8: Risk of Bias Assessment
-        if study.extraction_metadata and 'risk_of_bias' in str(study.extraction_metadata):
-            # Try to extract from metadata
-            pass
-        
-        # Sheet 9: Extraction Metadata
-        if study.extraction_metadata:
-            meta_data = pd.DataFrame([{
-                'Extraction Date': study.extraction_date.strftime('%Y-%m-%d %H:%M') if study.extraction_date else '',
-                'Extraction Methods': ', '.join(study.extraction_metadata.get('extraction_methods', [])),
-                'Tables Found': study.extraction_metadata.get('tables_found'),
-                'Overall Confidence': study.confidence_scores.get('overall') if study.confidence_scores else None
-            }])
-            meta_data.to_excel(writer, sheet_name='Extraction Metadata', index=False)
+        study_info.to_excel(writer, sheet_name='Study Info', index=False)
     
     output.seek(0)
     
@@ -1104,88 +1196,73 @@ def export_csv(study_id):
         output,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
-        download_name=f'study_{study_id}_CONSORT_data.xlsx'
-    )
-@app.route('/api/export/nma-ready/<int:study_id>', methods=['GET'])
-def export_nma_ready(study_id):
-    """Export study data in NMA-ready format (wide format for meta-analysis software)"""
-    study = Study.query.get_or_404(study_id)
-    
-    output = io.BytesIO()
-    
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # NMA-ready outcomes format (one row per comparison)
-        nma_data = []
-        
-        for outcome in study.outcomes:
-            if outcome.outcome_type == 'primary' and outcome.effect_estimate:
-                row = {
-                    'Study': study.trial_registration or study.title[:50],
-                    'Year': study.year,
-                    'Outcome': outcome.outcome_name,
-                    'Timepoint': outcome.timepoint,
-                    'Effect_Type': outcome.effect_estimate.get('type'),
-                    'Effect_Estimate': outcome.effect_estimate.get('value'),
-                    'CI_Lower': outcome.effect_estimate.get('ci_lower'),
-                    'CI_Upper': outcome.effect_estimate.get('ci_upper'),
-                    'P_Value': outcome.effect_estimate.get('p_value'),
-                    'SE': None  # Calculate if CI available
-                }
-                
-                # Add treatment arms
-                if study.interventions:
-                    for i, intervention in enumerate(study.interventions[:2]):  # First 2 arms
-                        prefix = f'Arm{i+1}_'
-                        row[f'{prefix}Name'] = intervention.arm_name
-                        row[f'{prefix}N'] = intervention.n_analyzed
-                
-                # Add arm-specific results
-                if outcome.results_by_arm:
-                    for i, arm_result in enumerate(outcome.results_by_arm[:2]):
-                        prefix = f'Arm{i+1}_'
-                        row[f'{prefix}Mean'] = arm_result.get('mean')
-                        row[f'{prefix}SD'] = arm_result.get('sd')
-                        row[f'{prefix}Events'] = arm_result.get('events')
-                        row[f'{prefix}Total'] = arm_result.get('total')
-                
-                nma_data.append(row)
-        
-        if nma_data:
-            nma_df = pd.DataFrame(nma_data)
-            nma_df.to_excel(writer, sheet_name='NMA_Ready', index=False)
-        
-        # Add subgroup data in NMA format
-        subgroup_nma = []
-        for sg in study.subgroups:
-            if sg.subgroups:
-                for subgroup in sg.subgroups:
-                    subgroup_nma.append({
-                        'Study': study.trial_registration or study.title[:50],
-                        'Subgroup_Variable': sg.subgroup_variable,
-                        'Subgroup_Name': subgroup.get('subgroup_name'),
-                        'Effect': subgroup.get('effect_estimate', {}).get('value'),
-                        'CI_Lower': subgroup.get('effect_estimate', {}).get('ci_lower'),
-                        'CI_Upper': subgroup.get('effect_estimate', {}).get('ci_upper'),
-                        'P_Value': subgroup.get('effect_estimate', {}).get('p_value'),
-                        'P_Interaction': sg.p_interaction
-                    })
-        
-        if subgroup_nma:
-            subgroup_df = pd.DataFrame(subgroup_nma)
-            subgroup_df.to_excel(writer, sheet_name='Subgroup_NMA', index=False)
-    
-    output.seek(0)
-    
-    return send_file(
-        output,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        as_attachment=True,
-        download_name=f'study_{study_id}_NMA_ready.xlsx'
+        download_name=f'study_{study_id}_data.xlsx'
     )
 
-@app.route('/api/export/all-studies/csv', methods=['GET'])
-def export_all_studies_csv():
-    """Export all studies as a single Excel file with multiple sheets"""
+@app.route('/api/studies/search', methods=['GET'])
+def search_studies():
+    """Search and filter studies"""
+    query = request.args.get('q', '')
+    year = request.args.get('year', '')
+    intervention = request.args.get('intervention', '')
+    
+    studies_query = Study.query
+    
+    if query:
+        studies_query = studies_query.filter(Study.title.ilike(f'%{query}%'))
+    
+    if year:
+        studies_query = studies_query.filter(Study.year == int(year))
+    
+    if intervention:
+        studies_query = studies_query.join(Intervention).filter(
+            Intervention.arm_name.ilike(f'%{intervention}%')
+        )
+    
+    studies = studies_query.all()
+    
+    return jsonify({
+        'studies': [_serialize_study(s) for s in studies],
+        'count': len(studies)
+    })
+
+@app.route('/api/studies/compare', methods=['POST'])
+def compare_studies():
+    """Compare multiple studies side by side"""
+    study_ids = request.json.get('study_ids', [])
+    
+    if not study_ids or len(study_ids) < 2:
+        return jsonify({'error': 'Need at least 2 study IDs'}), 400
+    
+    studies = Study.query.filter(Study.id.in_(study_ids)).all()
+    
+    comparison = {
+        'studies': [_serialize_study(s) for s in studies],
+        'comparison_matrix': {
+            'interventions': {},
+            'outcomes': {},
+            'populations': {}
+        }
+    }
+    
+    for study in studies:
+        study_key = f"{study.trial_registration or study.id}"
+        
+        comparison['comparison_matrix']['interventions'][study_key] = [
+            {'name': i.arm_name, 'n': i.n_randomized} 
+            for i in study.interventions
+        ]
+        
+        comparison['comparison_matrix']['populations'][study_key] = {
+            'n': study.population_data.get('total_randomized') if study.population_data else None,
+            'age': study.population_data.get('age_mean') if study.population_data else None
+        }
+    
+    return jsonify(comparison)
+
+@app.route('/api/export/all-studies', methods=['GET'])
+def export_all_studies_combined():
+    """Export all studies in NMA-ready format"""
     studies = Study.query.all()
     
     if not studies:
@@ -1194,54 +1271,68 @@ def export_all_studies_csv():
     output = io.BytesIO()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Summary sheet - all studies
         summary_data = []
         for study in studies:
             summary_data.append({
                 'Study_ID': study.id,
+                'Trial_Registration': study.trial_registration,
                 'Title': study.title,
                 'Year': study.year,
-                'Trial_Registration': study.trial_registration,
-                'Journal': study.journal,
                 'N_Randomized': study.population_data.get('total_randomized') if study.population_data else None,
                 'N_Arms': len(study.interventions),
-                'N_Outcomes': len([o for o in study.outcomes if o.outcome_type == 'primary']),
-                'Extraction_Date': study.extraction_date.strftime('%Y-%m-%d') if study.extraction_date else None
+                'Extraction_Date': study.extraction_date.strftime('%Y-%m-%d')
             })
-        
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_excel(writer, sheet_name='Studies_Summary', index=False)
-        
-        # Combined outcomes from all studies
-        all_outcomes = []
-        for study in studies:
-            for outcome in study.outcomes:
-                if outcome.outcome_type == 'primary':
-                    all_outcomes.append({
-                        'Study_ID': study.id,
-                        'Study': study.trial_registration or study.title[:50],
-                        'Year': study.year,
-                        'Outcome': outcome.outcome_name,
-                        'Timepoint': outcome.timepoint,
-                        'Effect_Type': outcome.effect_estimate.get('type') if outcome.effect_estimate else None,
-                        'Effect': outcome.effect_estimate.get('value') if outcome.effect_estimate else None,
-                        'CI_Lower': outcome.effect_estimate.get('ci_lower') if outcome.effect_estimate else None,
-                        'CI_Upper': outcome.effect_estimate.get('ci_upper') if outcome.effect_estimate else None,
-                        'P_Value': outcome.effect_estimate.get('p_value') if outcome.effect_estimate else None
-                    })
-        
-        if all_outcomes:
-            outcomes_df = pd.DataFrame(all_outcomes)
-            outcomes_df.to_excel(writer, sheet_name='All_Outcomes', index=False)
+        pd.DataFrame(summary_data).to_excel(writer, sheet_name='All Studies', index=False)
     
     output.seek(0)
-    
     return send_file(
         output,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
-        download_name='all_studies_export.xlsx'
+        download_name='all_studies_NMA_ready.xlsx'
     )
+
+# ==================== DATABASE MIGRATION ====================
+
+@app.cli.command()
+def init_db():
+    """Initialize the database"""
+    db.create_all()
+    print("Database initialized!")
+
+@app.cli.command()
+def migrate_add_pdf_columns():
+    """Add pdf_blob and pdf_filename columns to existing database"""
+    from sqlalchemy import text
+    
+    try:
+        with db.engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='studies' AND column_name IN ('pdf_blob', 'pdf_filename')"
+            ))
+            existing_columns = [row[0] for row in result]
+        
+        if 'pdf_blob' not in existing_columns:
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE studies ADD COLUMN pdf_blob BYTEA"))
+                conn.commit()
+            print("✓ Added pdf_blob column")
+        else:
+            print("✓ pdf_blob column already exists")
+        
+        if 'pdf_filename' not in existing_columns:
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE studies ADD COLUMN pdf_filename VARCHAR(500)"))
+                conn.commit()
+            print("✓ Added pdf_filename column")
+        else:
+            print("✓ pdf_filename column already exists")
+        
+        print("\n✓ Migration complete!")
+        
+    except Exception as e:
+        print(f"✗ Migration failed: {e}")
 
 if __name__ == '__main__':
     with app.app_context():

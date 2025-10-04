@@ -8,52 +8,138 @@
     <style>
         .collapsible-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
         .collapsible-content.open { max-height: 3000px; }
+        .tab-active { border-bottom: 3px solid #2563eb; color: #2563eb; }
     </style>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-6">
     <div class="max-w-7xl mx-auto">
+        <!-- Header -->
         <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
             <h1 class="text-3xl font-bold text-gray-800">Clinical Trial Data Extractor</h1>
             <p class="text-gray-600">AI-powered extraction for Network Meta-Analyses</p>
+            
+            <!-- Tabs -->
+            <div class="flex gap-6 mt-4 border-b">
+                <button onclick="showTab('extract')" id="tab-extract" class="pb-2 font-medium tab-active">
+                    Extract New
+                </button>
+                <button onclick="showTab('library')" id="tab-library" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                    Studies Library
+                </button>
+                <button onclick="showTab('compare')" id="tab-compare" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                    Compare Studies
+                </button>
+            </div>
+            
             <div class="mt-4 flex items-center gap-2">
                 <div class="w-3 h-3 rounded-full bg-green-500"></div>
                 <span class="text-sm text-gray-600">Backend Connected</span>
             </div>
         </div>
 
-        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
-            <h2 class="text-xl font-semibold mb-4">Upload Clinical Trial PDF</h2>
-            
-            <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition cursor-pointer" onclick="document.getElementById('pdfFile').click()">
-                <input type="file" id="pdfFile" accept=".pdf" class="hidden" />
-                <p class="text-lg font-medium text-gray-700" id="fileName">Click to upload PDF</p>
+        <!-- Extract Tab -->
+        <div id="extractTab" class="tab-content">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <h2 class="text-xl font-semibold mb-4">Upload Clinical Trial PDF</h2>
+                
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition cursor-pointer" onclick="document.getElementById('pdfFile').click()">
+                    <input type="file" id="pdfFile" accept=".pdf" class="hidden" />
+                    <p class="text-lg font-medium text-gray-700" id="fileName">Click to upload PDF</p>
+                </div>
+
+                <button onclick="extractData()" class="w-full mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+                    Extract All Trial Data
+                </button>
+
+                <div id="loadingDiv" class="hidden mt-4 p-4 bg-blue-50 rounded-lg">
+                    <span class="text-blue-800">Extracting... 30-60 seconds...</span>
+                </div>
+
+                <div id="errorDiv" class="hidden mt-4 p-4 bg-red-50 rounded-lg">
+                    <p class="text-red-800" id="errorText"></p>
+                </div>
             </div>
 
-            <button onclick="extractData()" class="w-full mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
-                Extract All Trial Data
-            </button>
+            <div id="resultsContainer" class="hidden"></div>
+        </div>
 
-            <div id="loadingDiv" class="hidden mt-4 p-4 bg-blue-50 rounded-lg">
-                <span class="text-blue-800">Extracting... 30-60 seconds...</span>
-            </div>
-
-            <div id="errorDiv" class="hidden mt-4 p-4 bg-red-50 rounded-lg">
-                <p class="text-red-800" id="errorText"></p>
+        <!-- Library Tab -->
+        <div id="libraryTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold">Studies Library</h2>
+                    <button onclick="exportAllStudies()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                        Export All Studies
+                    </button>
+                </div>
+                
+                <!-- Search/Filter -->
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <input type="text" id="searchQuery" placeholder="Search by title..." 
+                           class="px-4 py-2 border rounded-lg" onkeyup="searchStudies()">
+                    <input type="number" id="searchYear" placeholder="Filter by year..." 
+                           class="px-4 py-2 border rounded-lg" onchange="searchStudies()">
+                    <input type="text" id="searchIntervention" placeholder="Filter by intervention..." 
+                           class="px-4 py-2 border rounded-lg" onkeyup="searchStudies()">
+                </div>
+                
+                <div id="studiesLibrary" class="space-y-3">
+                    <p class="text-gray-500">Loading studies...</p>
+                </div>
             </div>
         </div>
 
-        <div id="resultsContainer" class="hidden"></div>
+        <!-- Compare Tab -->
+        <div id="compareTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">Compare Studies</h2>
+                
+                <div class="mb-4">
+                    <p class="text-sm text-gray-600 mb-2">Select 2-4 studies to compare:</p>
+                    <div id="compareSelection" class="space-y-2"></div>
+                </div>
+                
+                <button onclick="performComparison()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    Compare Selected Studies
+                </button>
+                
+                <div id="comparisonResults" class="mt-6"></div>
+            </div>
+        </div>
     </div>
 
     <script>
         const fileInput = document.getElementById('pdfFile');
         let extractedData = null;
+        let allStudies = [];
+        let selectedForComparison = [];
 
         fileInput.addEventListener('change', function() {
             if (this.files && this.files[0]) {
                 document.getElementById('fileName').textContent = this.files[0].name;
             }
         });
+
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.add('hidden'));
+            document.querySelectorAll('[id^="tab-"]').forEach(btn => {
+                btn.classList.remove('tab-active');
+                btn.classList.add('text-gray-600');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName + 'Tab').classList.remove('hidden');
+            document.getElementById('tab-' + tabName).classList.add('tab-active');
+            document.getElementById('tab-' + tabName).classList.remove('text-gray-600');
+            
+            // Load data for that tab
+            if (tabName === 'library') {
+                loadStudiesLibrary();
+            } else if (tabName === 'compare') {
+                loadCompareView();
+            }
+        }
 
         async function extractData() {
             if (!fileInput.files || !fileInput.files[0]) {
@@ -73,6 +159,7 @@
 
                 if (result.data) {
                     extractedData = result.data;
+                    extractedData.id = result.study_id;
                     displayResults(result.data);
                 } else {
                     showError(result.error || 'Extraction failed');
@@ -82,6 +169,260 @@
             } finally {
                 document.getElementById('loadingDiv').classList.add('hidden');
             }
+        }
+
+        async function loadStudiesLibrary() {
+            try {
+                const response = await fetch('/api/studies');
+                const data = await response.json();
+                allStudies = data.studies;
+                displayStudiesLibrary(allStudies);
+            } catch (error) {
+                document.getElementById('studiesLibrary').innerHTML = 
+                    '<p class="text-red-600">Error loading studies</p>';
+            }
+        }
+
+        async function searchStudies() {
+            const query = document.getElementById('searchQuery').value;
+            const year = document.getElementById('searchYear').value;
+            const intervention = document.getElementById('searchIntervention').value;
+            
+            const params = new URLSearchParams();
+            if (query) params.append('q', query);
+            if (year) params.append('year', year);
+            if (intervention) params.append('intervention', intervention);
+            
+            try {
+                const response = await fetch('/api/studies/search?' + params);
+                const data = await response.json();
+                displayStudiesLibrary(data.studies);
+            } catch (error) {
+                console.error('Search error:', error);
+            }
+        }
+
+        function displayStudiesLibrary(studies) {
+            const container = document.getElementById('studiesLibrary');
+            
+            if (studies.length === 0) {
+                container.innerHTML = '<p class="text-gray-500">No studies found. Upload a PDF to get started.</p>';
+                return;
+            }
+            
+            container.innerHTML = studies.map(study => `
+                <div class="border rounded-lg p-4 hover:bg-gray-50">
+                    <div class="flex items-start justify-between">
+                        <div class="flex-1">
+                            <h3 class="font-semibold text-gray-900">${study.study_identification.title || 'Untitled'}</h3>
+                            <p class="text-sm text-gray-600">
+                                ${study.study_identification.year || 'N/A'} | 
+                                ${study.study_identification.journal || 'Unknown journal'} | 
+                                ${study.interventions.length} arms
+                            </p>
+                            <p class="text-xs text-gray-500 mt-1">
+                                Extracted: ${new Date(study.extraction_date).toLocaleDateString()}
+                            </p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="viewStudy(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
+                                View
+                            </button>
+                            <button onclick="reExtractStudy(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200">
+                                Re-extract
+                            </button>
+                            <button onclick="downloadStudyExcel(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-green-100 text-green-700 rounded hover:bg-green-200">
+                                Excel
+                            </button>
+                            <button onclick="deleteStudy(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200">
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function loadCompareView() {
+            if (allStudies.length === 0) {
+                loadStudiesLibrary().then(() => populateCompareSelection());
+            } else {
+                populateCompareSelection();
+            }
+        }
+
+        function populateCompareSelection() {
+            const container = document.getElementById('compareSelection');
+            container.innerHTML = allStudies.map(study => `
+                <label class="flex items-center gap-2 p-2 hover:bg-gray-50 rounded">
+                    <input type="checkbox" value="${study.id}" onchange="toggleCompareSelection(${study.id})"
+                           ${selectedForComparison.includes(study.id) ? 'checked' : ''}>
+                    <span class="text-sm">${study.study_identification.title || 'Untitled'} (${study.study_identification.year})</span>
+                </label>
+            `).join('');
+        }
+
+        function toggleCompareSelection(studyId) {
+            if (selectedForComparison.includes(studyId)) {
+                selectedForComparison = selectedForComparison.filter(id => id !== studyId);
+            } else {
+                selectedForComparison.push(studyId);
+            }
+        }
+
+        async function performComparison() {
+            if (selectedForComparison.length < 2) {
+                alert('Please select at least 2 studies to compare');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/studies/compare', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({study_ids: selectedForComparison})
+                });
+                const data = await response.json();
+                displayComparison(data);
+            } catch (error) {
+                alert('Comparison failed: ' + error.message);
+            }
+        }
+
+        function displayComparison(data) {
+            const container = document.getElementById('comparisonResults');
+            
+            container.innerHTML = `
+                <h3 class="font-semibold text-lg mb-4">Comparison Results</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full border">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="border p-2 text-left">Study</th>
+                                <th class="border p-2 text-left">Year</th>
+                                <th class="border p-2 text-left">Interventions</th>
+                                <th class="border p-2 text-left">Sample Size</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.studies.map(study => `
+                                <tr>
+                                    <td class="border p-2 text-sm">${study.study_identification.title.substring(0, 50)}...</td>
+                                    <td class="border p-2">${study.study_identification.year}</td>
+                                    <td class="border p-2 text-sm">${study.interventions.map(i => i.arm_name).join(', ')}</td>
+                                    <td class="border p-2">${study.population?.total_randomized || 'N/A'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function viewStudy(studyId) {
+            try {
+                const response = await fetch(`/api/studies/${studyId}`);
+                const study = await response.json();
+                extractedData = study;
+                showTab('extract');
+                displayResults(study);
+            } catch (error) {
+                alert('Error loading study');
+            }
+        }
+
+        async function reExtractStudy(studyId) {
+            if (!confirm('⚠️ Re-extract this study?\n\nThis will:\n• Use the improved extraction prompts\n• Overwrite existing data\n• Take 30-60 seconds\n\nContinue?')) {
+                return;
+            }
+            
+            // Show loading indicator
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'reExtractionLoading';
+            loadingDiv.className = 'fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50';
+            loadingDiv.innerHTML = `
+                <div class="bg-white rounded-lg p-6 max-w-md">
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                        <span class="text-lg font-semibold">Re-extracting study...</span>
+                    </div>
+                    <p class="text-sm text-gray-600">This may take 30-60 seconds. Please wait.</p>
+                </div>
+            `;
+            document.body.appendChild(loadingDiv);
+            
+            try {
+                const response = await fetch(`/api/studies/${studyId}/re-extract`, {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Update the extracted data and display
+                    extractedData = result.data;
+                    showTab('extract');
+                    displayResults(result.data);
+                    
+                    // Show success message
+                    alert('✅ Study re-extracted successfully!\n\nThe data has been updated with improved extraction.');
+                } else {
+                    alert('❌ Re-extraction failed: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('❌ Re-extraction error: ' + error.message);
+            } finally {
+                // Remove loading indicator
+                const loading = document.getElementById('reExtractionLoading');
+                if (loading) {
+                    loading.remove();
+                }
+            }
+        }
+
+        async function deleteStudy(studyId) {
+            // Get study title for confirmation
+            const study = allStudies.find(s => s.id === studyId);
+            const studyTitle = study ? (study.study_identification.title || 'this study') : 'this study';
+            
+            if (!confirm(`⚠️ DELETE STUDY?\n\n"${studyTitle}"\n\nThis will permanently delete:\n• All extracted data\n• Interventions\n• Outcomes\n• Subgroups\n• Adverse events\n• Stored PDF\n\nThis CANNOT be undone!\n\nContinue?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/studies/${studyId}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Remove from local array
+                    allStudies = allStudies.filter(s => s.id !== studyId);
+                    
+                    // Refresh the library display
+                    displayStudiesLibrary(allStudies);
+                    
+                    // Show success message
+                    alert('✅ Study deleted successfully!');
+                } else {
+                    alert('❌ Delete failed: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('❌ Delete error: ' + error.message);
+            }
+        }
+
+        function downloadStudyExcel(studyId) {
+            window.location.href = `/api/export/csv/${studyId}`;
+        }
+
+        function exportAllStudies() {
+            window.location.href = '/api/export/all-studies';
         }
 
         function showError(message) {
@@ -97,198 +438,701 @@
         }
 
         function displayResults(data) {
-    const container = document.getElementById('resultsContainer');
-    container.classList.remove('hidden');
-    
-    let html = `
-        <div class="bg-white rounded-lg shadow-lg p-4 mb-4">
-            <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold">Extracted Data - CONSORT Compliant</h2>
-                <div class="flex gap-2">
-                    <button onclick="downloadJSON()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">JSON</button>
-                    <button onclick="downloadExcel()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Excel (All Sheets)</button>
-                </div>
-            </div>
-        </div>
-    `;
-
-    // Study Identification
-    if (data.study_identification) {
-        html += createSection('Study Identification', 'id', `
-            <div class="space-y-2">
-                <h3 class="text-xl font-bold text-gray-900 mb-3">${data.study_identification.title || 'Untitled'}</h3>
-                <div class="grid grid-cols-2 gap-3 text-sm">
-                    <div><span class="font-medium">Authors:</span> ${(data.study_identification.authors || []).join(', ')}</div>
-                    <div><span class="font-medium">Journal:</span> ${data.study_identification.journal || 'N/A'}</div>
-                    <div><span class="font-medium">Year:</span> ${data.study_identification.year || 'N/A'}</div>
-                    <div><span class="font-medium">DOI:</span> ${data.study_identification.doi || 'N/A'}</div>
-                    <div><span class="font-medium">Trial Registration:</span> ${data.study_identification.trial_registration || 'N/A'}</div>
-                </div>
-            </div>
-        `, true);
-    }
-
-    // Study Design
-    if (data.study_design) {
-        html += createSection('Study Design & Methodology', 'design', `
-            <div class="grid grid-cols-2 gap-4 text-sm">
-                <div><span class="font-medium">Design Type:</span> ${data.study_design.type || 'N/A'}</div>
-                <div><span class="font-medium">Blinding:</span> ${data.study_design.blinding || 'N/A'}</div>
-                <div><span class="font-medium">Randomization:</span> ${data.study_design.randomization_method || 'N/A'}</div>
-                <div><span class="font-medium">Allocation Concealment:</span> ${data.study_design.allocation_concealment || 'N/A'}</div>
-                <div><span class="font-medium">Duration:</span> ${data.study_design.duration_total || 'N/A'}</div>
-                <div><span class="font-medium">Country:</span> ${data.study_design.country || 'N/A'}</div>
-            </div>
-        `, true);
-    }
-
-    // Population & Eligibility
-    if (data.population) {
-        html += createSection(`Population (N=${data.population.total_randomized || '?'})`, 'pop', `
-            <div class="grid grid-cols-2 gap-6">
-                <div>
-                    <h4 class="font-semibold text-gray-700 mb-2">Sample Sizes</h4>
-                    <div class="space-y-1 text-sm">
-                        <div><span class="font-medium">Screened:</span> ${data.population.total_screened || 'N/A'}</div>
-                        <div><span class="font-medium">Randomized:</span> ${data.population.total_randomized || 'N/A'}</div>
-                        <div><span class="font-medium">Analyzed (ITT):</span> ${data.population.total_analyzed_itt || 'N/A'}</div>
+            const container = document.getElementById('resultsContainer');
+            container.classList.remove('hidden');
+            
+            let html = '';
+            
+            // Standards compliance header
+            html += '<div class="bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg p-4 mb-4">';
+            html += '<div class="flex items-start justify-between">';
+            html += '<div>';
+            html += '<h3 class="text-lg font-bold mb-1">📊 Extracted Clinical Trial Data</h3>';
+            html += '<p class="text-sm opacity-90">Following CONSORT Guidelines & Cochrane Standards for Systematic Reviews and Meta-Analysis</p>';
+            html += '</div>';
+            html += '<div class="text-right text-xs">';
+            html += '<div>✓ Network Meta-Analysis Ready</div>';
+            html += '<div>✓ All Statistical Parameters</div>';
+            html += '<div>✓ Missing Data Highlighted</div>';
+            html += '</div>';
+            html += '</div></div>';
+            
+            // Action buttons
+            html += '<div class="mb-4 flex gap-3">';
+            html += '<button onclick="downloadJSON()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">📥 Download JSON</button>';
+            html += '<button onclick="downloadExcel()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium">📊 Download Excel (CONSORT Format)</button>';
+            if (data.id) {
+                html += `<button onclick="reExtractStudy(${data.id})" class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium">🔄 Re-extract This Study</button>`;
+            }
+            html += '<button onclick="toggleRawJSON()" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">🔍 View Raw JSON</button>';
+            html += '</div>';
+            
+            // Data quality indicator
+            const confidence = (data.confidence_scores?.overall || 0);
+            const confidencePercent = (confidence * 100).toFixed(0);
+            let confidenceBg, confidenceBorder, confidenceTextColor, confidenceText;
+            
+            if (confidence > 0.7) {
+                confidenceBg = 'bg-green-50';
+                confidenceBorder = 'border-green-200';
+                confidenceTextColor = 'text-green-900';
+                confidenceText = 'High Confidence';
+            } else if (confidence > 0.4) {
+                confidenceBg = 'bg-yellow-50';
+                confidenceBorder = 'border-yellow-200';
+                confidenceTextColor = 'text-yellow-900';
+                confidenceText = 'Medium Confidence';
+            } else {
+                confidenceBg = 'bg-red-50';
+                confidenceBorder = 'border-red-200';
+                confidenceTextColor = 'text-red-900';
+                confidenceText = 'Low Confidence - Manual Review Recommended';
+            }
+            
+            html += `<div class="${confidenceBg} border-2 ${confidenceBorder} rounded-lg p-3 mb-4">`;
+            html += `<div class="flex items-center gap-2">`;
+            html += `<span class="font-semibold ${confidenceTextColor}">Extraction Quality:</span>`;
+            html += `<span class="${confidenceTextColor}">${confidenceText} (${confidencePercent}%)</span>`;
+            html += `<span class="text-xs text-gray-700 ml-auto">⚠️ Always verify critical values against source PDF</span>`;
+            html += '</div></div>';
+            
+            // Raw JSON toggle (hidden by default)
+            html += '<div id="rawJsonContainer" class="hidden mb-6 bg-white rounded-lg shadow-lg p-6">';
+            html += '<h3 class="font-semibold mb-2">Raw JSON Data</h3>';
+            html += '<pre class="overflow-x-auto text-xs bg-gray-50 p-4 rounded">' + JSON.stringify(data, null, 2) + '</pre>';
+            html += '</div>';
+            
+            // Study Identification (open by default)
+            html += createSection('Study Identification', 'study-id', formatStudyIdentification(data), true);
+            
+            // Study Design
+            html += createSection('Study Design & Methodology', 'study-design', formatStudyDesign(data), false);
+            
+            // Population (open by default)
+            html += createSection('Population & Eligibility', 'population', formatPopulation(data), true);
+            
+            // Interventions (open by default)
+            html += createSection('Interventions (CONSORT Flow)', 'interventions', formatInterventions(data), true);
+            
+            // Primary Outcomes (open by default)
+            html += createSection('Primary Outcomes (All Statistical Parameters)', 'primary-outcomes', formatPrimaryOutcomes(data), true);
+            
+            // Secondary Outcomes
+            html += createSection('Secondary Outcomes (All Statistical Parameters)', 'secondary-outcomes', formatSecondaryOutcomes(data), false);
+            
+            // Subgroup Analyses
+            if (data.subgroup_analyses && data.subgroup_analyses.length > 0) {
+                html += createSection('Subgroup Analyses', 'subgroups', formatSubgroups(data), false);
+            }
+            
+            // Adverse Events
+            if (data.adverse_events && data.adverse_events.length > 0) {
+                html += createSection('Adverse Events', 'adverse-events', formatAdverseEvents(data), false);
+            }
+            
+            // Statistical Methods
+            if (data.statistical_methods) {
+                html += createSection('Statistical Methods', 'stat-methods', formatStatisticalMethods(data), false);
+            }
+            
+            // Risk of Bias Assessment
+            if (data.risk_of_bias) {
+                html += createSection('Risk of Bias Assessment (Cochrane RoB 2)', 'risk-of-bias', formatRiskOfBias(data), false);
+            }
+            
+            // Extraction Metadata
+            html += createSection('Extraction Metadata', 'metadata', formatMetadata(data), false);
+            
+            container.innerHTML = html;
+        }
+        
+        function toggleRawJSON() {
+            const jsonContainer = document.getElementById('rawJsonContainer');
+            jsonContainer.classList.toggle('hidden');
+        }
+        
+        function formatStudyIdentification(data) {
+            const si = data.study_identification || {};
+            return `
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Title</p>
+                        <p class="text-gray-900">${si.title || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Trial Registration</p>
+                        <p class="text-gray-900">${si.trial_registration || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Authors</p>
+                        <p class="text-gray-900 text-sm">${Array.isArray(si.authors) ? si.authors.join(', ') : (si.authors || 'Not reported')}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Journal</p>
+                        <p class="text-gray-900">${si.journal || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Year</p>
+                        <p class="text-gray-900">${si.year || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">DOI</p>
+                        <p class="text-gray-900 text-sm">${si.doi || 'Not reported'}</p>
                     </div>
                 </div>
-                <div>
-                    <h4 class="font-semibold text-gray-700 mb-2">Demographics</h4>
-                    <div class="space-y-1 text-sm">
-                        <div><span class="font-medium">Mean Age:</span> ${data.population.age_mean || 'N/A'} ${data.population.age_sd ? '(SD ' + data.population.age_sd + ')' : ''}</div>
-                        <div><span class="font-medium">Male %:</span> ${data.population.sex_male_percent || 'N/A'}</div>
+            `;
+        }
+        
+        function formatStudyDesign(data) {
+            const sd = data.study_design || {};
+            let html = `
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Study Type</p>
+                        <p class="text-gray-900">${formatValue(sd.type)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Blinding</p>
+                        <p class="text-gray-900">${formatValue(sd.blinding)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Randomization Method</p>
+                        <p class="text-gray-900">${formatValue(sd.randomization_method)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Allocation Ratio</p>
+                        <p class="text-gray-900">${formatValue(sd.allocation_ratio)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Total Duration</p>
+                        <p class="text-gray-900">${formatValue(sd.duration_total)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Treatment Duration</p>
+                        <p class="text-gray-900">${formatValue(sd.duration_treatment)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Country</p>
+                        <p class="text-gray-900">${formatValue(sd.country)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Number of Sites</p>
+                        <p class="text-gray-900">${formatValue(sd.number_of_sites)}</p>
                     </div>
                 </div>
-            </div>
-            <div class="mt-4 grid grid-cols-2 gap-4">
-                <div>
-                    <h4 class="font-semibold text-gray-700 mb-2">Inclusion Criteria</h4>
-                    <ul class="list-disc pl-5 text-sm space-y-1">
-                        ${(data.population.inclusion_criteria || []).map(c => `<li>${c}</li>`).join('')}
-                    </ul>
-                </div>
-                <div>
-                    <h4 class="font-semibold text-gray-700 mb-2">Exclusion Criteria</h4>
-                    <ul class="list-disc pl-5 text-sm space-y-1">
-                        ${(data.population.exclusion_criteria || []).slice(0, 5).map(c => `<li>${c}</li>`).join('')}
-                        ${(data.population.exclusion_criteria || []).length > 5 ? '<li class="text-gray-500">... and more</li>' : ''}
-                    </ul>
-                </div>
-            </div>
-        `, true);
-    }
-
-    // Interventions
-    if (data.interventions) {
-        html += createSection(`Interventions (${data.interventions.length} arms)`, 'int', `
-            <div class="grid grid-cols-3 gap-4">
-                ${data.interventions.map((i, idx) => `
-                    <div class="border rounded-lg p-4 bg-gray-50">
-                        <div class="flex items-center gap-2 mb-2">
-                            <span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">${idx + 1}</span>
-                            <h4 class="font-bold text-blue-700">${i.arm_name}</h4>
-                        </div>
-                        <div class="text-sm space-y-1">
-                            <div><span class="font-medium">N Randomized:</span> ${i.n_randomized || 'N/A'}</div>
-                            <div><span class="font-medium">N Analyzed:</span> ${i.n_analyzed || 'N/A'}</div>
-                            ${i.dose && i.dose !== 'NOT_APPLICABLE' ? `<div><span class="font-medium">Dose:</span> ${i.dose}</div>` : ''}
-                            ${i.frequency && i.frequency !== 'NOT_APPLICABLE' ? `<div><span class="font-medium">Frequency:</span> ${i.frequency}</div>` : ''}
-                            <div><span class="font-medium">Duration:</span> ${i.duration || 'N/A'}</div>
-                        </div>
+            `;
+            
+            // Display all sites/institutions if available
+            if (sd.sites && sd.sites.length > 0) {
+                html += '<div class="mt-4">';
+                html += '<p class="text-sm font-semibold text-gray-600 mb-2">Study Sites/Institutions (All Sites Listed)</p>';
+                html += '<div class="bg-gray-50 p-3 rounded border border-gray-200">';
+                html += '<table class="w-full text-sm">';
+                html += '<thead><tr class="border-b border-gray-300">';
+                html += '<th class="py-2 text-left font-semibold">#</th>';
+                html += '<th class="py-2 text-left font-semibold">Institution</th>';
+                html += '<th class="py-2 text-left font-semibold">Location</th>';
+                html += '<th class="py-2 text-left font-semibold">PI</th>';
+                html += '</tr></thead><tbody>';
+                
+                sd.sites.forEach((site, idx) => {
+                    const location = [site.city, site.country].filter(x => x).join(', ') || 'Not specified';
+                    html += `<tr class="border-b border-gray-200">
+                        <td class="py-2 font-semibold text-gray-600">${idx + 1}</td>
+                        <td class="py-2">${site.institution_name || 'Not reported'}</td>
+                        <td class="py-2 text-gray-600">${location}</td>
+                        <td class="py-2 text-sm text-gray-600">${site.principal_investigator || 'N/A'}</td>
+                    </tr>`;
+                });
+                
+                html += '</tbody></table>';
+                html += `<p class="text-xs text-gray-500 mt-2">⚠️ Review all sites for accuracy. Missing sites indicate incomplete extraction.</p>`;
+                html += '</div></div>';
+            } else {
+                html += '<div class="mt-4 bg-yellow-50 border border-yellow-200 p-3 rounded">';
+                html += '<p class="text-sm text-yellow-900"><strong>⚠️ No sites/institutions extracted.</strong> Check the PDF manually or re-extract the study.</p>';
+                html += '</div>';
+            }
+            
+            return html;
+        }
+        
+        function formatPopulation(data) {
+            const pop = data.population || {};
+            let html = `
+                <div class="grid grid-cols-3 gap-4 mb-6">
+                    <div class="bg-blue-50 p-3 rounded">
+                        <p class="text-sm font-semibold text-gray-600">Screened</p>
+                        <p class="text-2xl font-bold text-blue-600">${pop.total_screened || 'N/A'}</p>
                     </div>
-                `).join('')}
-            </div>
-        `, true);
-    }
-
-    // Primary Outcomes
-    if (data.outcomes && data.outcomes.primary) {
-        html += createSection(`Primary Outcomes (${data.outcomes.primary.length})`, 'out', 
-            data.outcomes.primary.map(o => `
-                <div class="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <h4 class="font-bold text-blue-900 mb-2">${o.outcome_name}</h4>
-                    <div class="text-sm mb-2">
-                        <span class="font-medium">Timepoint:</span> ${o.timepoint || 'N/A'}
-                        ${o.measurement_tool ? ` | <span class="font-medium">Tool:</span> ${o.measurement_tool}` : ''}
+                    <div class="bg-green-50 p-3 rounded">
+                        <p class="text-sm font-semibold text-gray-600">Randomized</p>
+                        <p class="text-2xl font-bold text-green-600">${pop.total_randomized || 'N/A'}</p>
                     </div>
-                    ${o.effect_estimate || o.between_group_comparison ? `
-                        <div class="bg-white p-3 rounded border border-blue-300">
-                            <h5 class="font-semibold text-sm mb-2">Effect Estimate</h5>
-                            <div class="grid grid-cols-2 gap-2 text-sm">
-                                ${o.effect_estimate ? `
-                                    <div><span class="font-medium">Comparison:</span> ${o.effect_estimate.comparison || 'N/A'}</div>
-                                    <div><span class="font-medium">Effect:</span> <span class="font-bold text-blue-700">${o.effect_estimate.effect_estimate || 'N/A'}</span> (${o.effect_estimate.effect_measure || 'N/A'})</div>
-                                    <div><span class="font-medium">95% CI:</span> [${o.effect_estimate.ci_95_lower || '?'}, ${o.effect_estimate.ci_95_upper || '?'}]</div>
-                                    <div><span class="font-medium">P-value:</span> <span class="font-bold">${o.effect_estimate.p_value || 'N/A'}</span></div>
-                                ` : ''}
-                                ${o.between_group_comparison ? `
-                                    <div><span class="font-medium">Comparison:</span> ${o.between_group_comparison.comparison || 'N/A'}</div>
-                                    <div><span class="font-medium">Effect:</span> <span class="font-bold text-blue-700">${o.between_group_comparison.effect_estimate || 'N/A'}</span></div>
-                                    <div><span class="font-medium">95% CI:</span> [${o.between_group_comparison.ci_95_lower}, ${o.between_group_comparison.ci_95_upper}]</div>
-                                    <div><span class="font-medium">P-value:</span> ${o.between_group_comparison.p_value}</div>
-                                ` : ''}
-                            </div>
-                        </div>
-                    ` : ''}
-                </div>
-            `).join(''), true);
-    }
-
-    // Subgroup Analyses
-    if (data.subgroup_analyses && data.subgroup_analyses.length > 0) {
-        html += createSection(`Subgroup Analyses (${data.subgroup_analyses.length})`, 'sub',
-            data.subgroup_analyses.map(sg => `
-                <div class="mb-4 p-4 bg-green-50 rounded-lg border border-green-200">
-                    <div class="flex items-center justify-between mb-2">
-                        <h4 class="font-bold text-green-900">Subgroup Variable: ${sg.subgroup_variable}</h4>
-                        <span class="text-sm bg-green-200 px-2 py-1 rounded">P interaction: ${sg.p_interaction}</span>
-                    </div>
-                    <div class="space-y-2 mt-3">
-                        ${(sg.subgroups || []).map(s => `
-                            <div class="bg-white p-3 rounded border border-green-300">
-                                <div class="font-semibold text-gray-800 mb-1">${s.subgroup_name}</div>
-                                ${s.subgroup_definition ? `<div class="text-xs text-gray-600 mb-2">${s.subgroup_definition}</div>` : ''}
-                                ${s.effect_estimate ? `
-                                    <div class="grid grid-cols-3 gap-2 text-sm">
-                                        <div><span class="font-medium">Effect:</span> ${s.effect_estimate.value}</div>
-                                        <div><span class="font-medium">95% CI:</span> [${s.effect_estimate.ci_lower}, ${s.effect_estimate.ci_upper}]</div>
-                                        <div><span class="font-medium">P:</span> ${s.effect_estimate.p_value}</div>
-                                    </div>
-                                ` : ''}
-                            </div>
-                        `).join('')}
+                    <div class="bg-purple-50 p-3 rounded">
+                        <p class="text-sm font-semibold text-gray-600">Analyzed (ITT)</p>
+                        <p class="text-2xl font-bold text-purple-600">${pop.total_analyzed_itt || 'N/A'}</p>
                     </div>
                 </div>
-            `).join(''), true);
-    }
-
-    // Adverse Events
-    if (data.adverse_events && data.adverse_events.length > 0) {
-        html += createSection(`Adverse Events (${data.adverse_events.length})`, 'ae',
-            `<div class="space-y-3">
-                ${data.adverse_events.map(ae => `
-                    <div class="p-3 bg-yellow-50 rounded border border-yellow-200">
-                        <div class="flex items-center justify-between mb-2">
-                            <div class="font-semibold text-gray-800">${ae.event_name}</div>
-                            <span class="text-xs bg-yellow-200 px-2 py-1 rounded">${ae.severity || ae.category || 'N/A'}</span>
-                        </div>
-                        <div class="grid grid-cols-${(ae.results_by_arm || []).length} gap-2 text-sm">
-                            ${(ae.results_by_arm || []).map(result => `
-                                <div class="bg-white p-2 rounded">
-                                    <div class="font-medium text-xs text-gray-600">${result.arm}</div>
-                                    <div>${result.events || result.participants_with_event} / ${result.total_exposed}</div>
-                                </div>
-                            `).join('')}
-                        </div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Age (Mean ± SD)</p>
+                        <p class="text-gray-900">${pop.age_mean || 'N/A'}${pop.age_sd ? ' ± ' + pop.age_sd : ''}</p>
                     </div>
-                `).join('')}
-            </div>`, false);
-    }
-
-    container.innerHTML = html;
-}
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Age Range</p>
+                        <p class="text-gray-900">${pop.age_range || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Male %</p>
+                        <p class="text-gray-900">${pop.sex_male_percent || 'N/A'}${pop.sex_male_percent ? '%' : ''}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Male N</p>
+                        <p class="text-gray-900">${pop.sex_male_n || 'N/A'}</p>
+                    </div>
+                </div>
+            `;
+            
+            if (pop.inclusion_criteria && pop.inclusion_criteria.length > 0) {
+                html += '<div class="mt-4"><p class="text-sm font-semibold text-gray-600 mb-2">Inclusion Criteria</p><ul class="list-disc list-inside text-sm text-gray-700">';
+                pop.inclusion_criteria.forEach(c => html += `<li>${c}</li>`);
+                html += '</ul></div>';
+            }
+            
+            if (pop.exclusion_criteria && pop.exclusion_criteria.length > 0) {
+                html += '<div class="mt-4"><p class="text-sm font-semibold text-gray-600 mb-2">Exclusion Criteria</p><ul class="list-disc list-inside text-sm text-gray-700">';
+                pop.exclusion_criteria.forEach(c => html += `<li>${c}</li>`);
+                html += '</ul></div>';
+            }
+            
+            return html;
+        }
+        
+        function formatInterventions(data) {
+            const interventions = data.interventions || [];
+            if (interventions.length === 0) return '<p class="text-gray-500">No intervention data extracted</p>';
+            
+            // CONSORT-compliant comprehensive table
+            let html = '<div class="overflow-x-auto mb-4">';
+            html += '<table class="w-full text-sm border border-gray-300">';
+            html += '<thead class="bg-gray-100"><tr>';
+            html += '<th class="border border-gray-300 p-2 text-left">Arm</th>';
+            html += '<th class="border border-gray-300 p-2 text-left">Intervention Details</th>';
+            html += '<th class="border border-gray-300 p-2 text-center bg-blue-50">Randomized</th>';
+            html += '<th class="border border-gray-300 p-2 text-center bg-blue-50">Started Tx</th>';
+            html += '<th class="border border-gray-300 p-2 text-center bg-blue-50">Completed</th>';
+            html += '<th class="border border-gray-300 p-2 text-center bg-green-50">Analyzed</th>';
+            html += '<th class="border border-gray-300 p-2 text-center bg-red-50">Dropouts</th>';
+            html += '</tr></thead><tbody>';
+            
+            interventions.forEach((intervention, idx) => {
+                html += '<tr class="hover:bg-gray-50">';
+                
+                // Arm name
+                html += `<td class="border border-gray-300 p-2 font-semibold">${intervention.arm_name || 'Arm ' + (idx + 1)}</td>`;
+                
+                // Intervention details
+                html += '<td class="border border-gray-300 p-2 text-xs">';
+                html += `<div class="space-y-1">`;
+                html += `<div><span class="font-semibold">Type:</span> ${formatValue(intervention.intervention_type)}</div>`;
+                if (intervention.drug_name) html += `<div><span class="font-semibold">Drug:</span> ${intervention.drug_name}</div>`;
+                html += `<div><span class="font-semibold">Dose:</span> ${formatValue(intervention.dose)}</div>`;
+                html += `<div><span class="font-semibold">Frequency:</span> ${formatValue(intervention.frequency)}</div>`;
+                html += `<div><span class="font-semibold">Route:</span> ${formatValue(intervention.route)}</div>`;
+                html += `<div><span class="font-semibold">Duration:</span> ${formatValue(intervention.duration)}</div>`;
+                if (intervention.concomitant_medications) {
+                    html += `<div><span class="font-semibold">Concomitant:</span> ${intervention.concomitant_medications}</div>`;
+                }
+                html += '</div></td>';
+                
+                // Sample sizes (CONSORT flow)
+                html += `<td class="border border-gray-300 p-2 text-center bg-blue-50 font-semibold">${formatValue(intervention.n_randomized)}</td>`;
+                html += `<td class="border border-gray-300 p-2 text-center bg-blue-50">${formatValue(intervention.n_started_treatment)}</td>`;
+                html += `<td class="border border-gray-300 p-2 text-center bg-blue-50">${formatValue(intervention.n_completed)}</td>`;
+                html += `<td class="border border-gray-300 p-2 text-center bg-green-50 font-semibold">${formatValue(intervention.n_analyzed_primary || intervention.n_analyzed)}</td>`;
+                html += `<td class="border border-gray-300 p-2 text-center bg-red-50">${formatValue(intervention.dropouts)}</td>`;
+                
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table></div>';
+            html += '<p class="text-xs text-gray-500">⚠️ RED highlights indicate missing critical data needed for CONSORT compliance and meta-analysis</p>';
+            
+            return html;
+        }
+        
+        function formatPrimaryOutcomes(data) {
+            const outcomes = data.outcomes?.primary || [];
+            if (outcomes.length === 0) return '<p class="text-gray-500">No primary outcomes extracted</p>';
+            
+            let html = '';
+            
+            outcomes.forEach((outcome, idx) => {
+                html += `<div class="mb-6 ${idx > 0 ? 'pt-6 border-t border-gray-200' : ''}">`;
+                html += `<h4 class="font-semibold text-lg text-gray-900 mb-3">${outcome.outcome_name || 'Outcome ' + (idx + 1)}</h4>`;
+                
+                // Outcome metadata
+                html += '<div class="grid grid-cols-3 gap-3 mb-4 text-sm">';
+                if (outcome.measurement_tool) {
+                    html += `<div><span class="font-semibold text-gray-600">Measurement:</span> ${outcome.measurement_tool}</div>`;
+                }
+                if (outcome.timepoint) {
+                    html += `<div><span class="font-semibold text-gray-600">Timepoint:</span> ${outcome.timepoint}</div>`;
+                }
+                if (outcome.definition) {
+                    html += `<div class="col-span-3"><span class="font-semibold text-gray-600">Definition:</span> ${outcome.definition}</div>`;
+                }
+                html += '</div>';
+                
+                // Comprehensive results table - SHOW ALL COLUMNS (CONSORT/Cochrane standard)
+                if (outcome.results_by_arm && outcome.results_by_arm.length > 0) {
+                    html += '<div class="mb-4"><p class="text-xs font-semibold text-gray-600 mb-2">ARM-LEVEL RESULTS (All Statistical Parameters)</p>';
+                    html += '<div class="overflow-x-auto">';
+                    html += '<table class="w-full text-xs border border-gray-300">';
+                    html += '<thead class="bg-gray-100">';
+                    html += '<tr>';
+                    html += '<th class="border border-gray-300 p-2 text-left sticky left-0 bg-gray-100">Arm</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center">N Analyzed</th>';
+                    
+                    // Continuous outcomes columns
+                    html += '<th class="border border-gray-300 p-2 text-center bg-blue-50">Mean</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-blue-50">SD</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-blue-50">SE</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-purple-50">Median</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-purple-50">IQR</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-purple-50">Q1</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-purple-50">Q3</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-purple-50">Min</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-purple-50">Max</th>';
+                    
+                    // Binary outcomes columns
+                    html += '<th class="border border-gray-300 p-2 text-center bg-green-50">Events</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-green-50">Total</th>';
+                    html += '<th class="border border-gray-300 p-2 text-center bg-green-50">Percent</th>';
+                    
+                    html += '</tr></thead><tbody>';
+                    
+                    outcome.results_by_arm.forEach(result => {
+                        html += '<tr class="hover:bg-gray-50">';
+                        html += `<td class="border border-gray-300 p-2 font-medium sticky left-0 bg-white">${result.arm || '<span class="text-red-600">NOT REPORTED</span>'}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center">${formatValue(result.n)}</td>`;
+                        
+                        // Continuous data
+                        html += `<td class="border border-gray-300 p-2 text-center bg-blue-50">${formatValue(result.mean)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-blue-50">${formatValue(result.sd)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-blue-50">${formatValue(result.se)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-purple-50">${formatValue(result.median)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-purple-50">${formatValue(result.iqr)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-purple-50">${formatValue(result.q1)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-purple-50">${formatValue(result.q3)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-purple-50">${formatValue(result.min)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-purple-50">${formatValue(result.max)}</td>`;
+                        
+                        // Binary data
+                        html += `<td class="border border-gray-300 p-2 text-center bg-green-50">${formatValue(result.events)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-green-50">${formatValue(result.total)}</td>`;
+                        html += `<td class="border border-gray-300 p-2 text-center bg-green-50">${formatValue(result.percent, '%')}</td>`;
+                        
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table></div>';
+                    html += '<p class="text-xs text-gray-500 mt-2">Legend: <span class="bg-blue-50 px-1">Blue</span> = Parametric stats | <span class="bg-purple-50 px-1">Purple</span> = Non-parametric stats | <span class="bg-green-50 px-1">Green</span> = Binary outcomes</p>';
+                    html += '</div>';
+                }
+                
+                // Between-group comparison (Effect estimates)
+                if (outcome.between_group_comparison || outcome.effect_estimate) {
+                    const comp = outcome.between_group_comparison || outcome.effect_estimate;
+                    html += '<div class="bg-blue-50 border-2 border-blue-200 p-4 rounded-lg">';
+                    html += '<p class="font-semibold text-gray-900 mb-3">BETWEEN-GROUP COMPARISON (Effect Estimate)</p>';
+                    
+                    html += '<div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">';
+                    html += `<div><p class="text-gray-600 text-xs">Comparison</p><p class="font-semibold">${formatValue(comp.comparison)}</p></div>`;
+                    html += `<div><p class="text-gray-600 text-xs">Effect Measure</p><p class="font-semibold">${formatValue(comp.effect_measure || comp.type)}</p></div>`;
+                    html += `<div><p class="text-gray-600 text-xs">Effect Estimate</p><p class="font-semibold">${formatValue(comp.effect_estimate || comp.value)}</p></div>`;
+                    html += `<div><p class="text-gray-600 text-xs">95% CI Lower</p><p class="font-semibold">${formatValue(comp.ci_95_lower || comp.ci_lower)}</p></div>`;
+                    html += `<div><p class="text-gray-600 text-xs">95% CI Upper</p><p class="font-semibold">${formatValue(comp.ci_95_upper || comp.ci_upper)}</p></div>`;
+                    html += `<div><p class="text-gray-600 text-xs">P-value</p><p class="font-semibold">${formatValue(comp.p_value)}</p></div>`;
+                    html += `<div><p class="text-gray-600 text-xs">Statistical Test</p><p class="font-semibold">${formatValue(comp.statistical_test)}</p></div>`;
+                    html += `<div class="col-span-2"><p class="text-gray-600 text-xs">Standard Error (SE)</p><p class="font-semibold">${formatValue(comp.se)}</p></div>`;
+                    html += '</div>';
+                    
+                    html += '</div>';
+                }
+                
+                // Data source info
+                if (outcome.data_source) {
+                    html += `<p class="text-xs text-gray-500 mt-2">📊 Data source: ${outcome.data_source}</p>`;
+                }
+                
+                html += '</div>';
+            });
+            
+            return html;
+        }
+        
+        // Helper function to format values and highlight missing data
+        function formatValue(value, suffix = '') {
+            if (value === null || value === undefined || value === '' || value === 'NOT_REPORTED' || value === 'UNCERTAIN') {
+                return '<span class="text-red-600 font-semibold">NOT REPORTED</span>';
+            }
+            if (value === 'N/A' || value === 'NA') {
+                return '<span class="text-gray-400">N/A</span>';
+            }
+            return value + suffix;
+        }
+        
+        function formatSecondaryOutcomes(data) {
+            const outcomes = data.outcomes?.secondary || [];
+            if (outcomes.length === 0) return '<p class="text-gray-500">No secondary outcomes extracted</p>';
+            
+            return formatPrimaryOutcomes({outcomes: {primary: outcomes}});
+        }
+        
+        function formatSubgroups(data) {
+            const subgroups = data.subgroup_analyses || [];
+            if (subgroups.length === 0) return '<p class="text-gray-500">No subgroup analyses</p>';
+            
+            let html = '';
+            
+            subgroups.forEach((sg, idx) => {
+                html += `<div class="mb-4 ${idx > 0 ? 'pt-4 border-t border-gray-200' : ''}">`;
+                html += `<h4 class="font-semibold text-gray-900 mb-2">${sg.subgroup_variable || 'Subgroup ' + (idx + 1)}</h4>`;
+                
+                if (sg.p_interaction) {
+                    html += `<p class="text-sm text-gray-600 mb-2"><span class="font-semibold">P for interaction:</span> ${sg.p_interaction}</p>`;
+                }
+                
+                if (sg.subgroups && sg.subgroups.length > 0) {
+                    html += '<div class="space-y-2">';
+                    sg.subgroups.forEach(subgroup => {
+                        html += '<div class="bg-gray-50 p-3 rounded">';
+                        html += `<p class="font-medium text-sm">${subgroup.subgroup_name || 'Unnamed subgroup'}</p>`;
+                        
+                        if (subgroup.effect_estimate) {
+                            const eff = subgroup.effect_estimate;
+                            html += `<p class="text-xs text-gray-600 mt-1">`;
+                            html += `${eff.type || 'Effect'}: ${eff.value || 'N/A'}`;
+                            if (eff.ci_lower) html += ` [${eff.ci_lower}, ${eff.ci_upper}]`;
+                            if (eff.p_value) html += `, p=${eff.p_value}`;
+                            html += `</p>`;
+                        }
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                }
+                
+                html += '</div>';
+            });
+            
+            return html;
+        }
+        
+        function formatAdverseEvents(data) {
+            const aes = data.adverse_events || [];
+            if (aes.length === 0) return '<p class="text-gray-500">No adverse events reported</p>';
+            
+            let html = '<div class="overflow-x-auto"><table class="w-full text-sm border border-gray-200">';
+            html += '<thead class="bg-gray-50"><tr>';
+            html += '<th class="border p-2 text-left">Event</th>';
+            html += '<th class="border p-2 text-center">Severity</th>';
+            html += '<th class="border p-2 text-center">Results by Arm</th>';
+            html += '</tr></thead><tbody>';
+            
+            aes.forEach(ae => {
+                html += '<tr>';
+                html += `<td class="border p-2">${ae.event_name || 'Unnamed event'}</td>`;
+                html += `<td class="border p-2 text-center">${ae.severity || ae.severity_grade || 'N/A'}</td>`;
+                html += '<td class="border p-2 text-xs">';
+                
+                if (ae.results_by_arm && ae.results_by_arm.length > 0) {
+                    ae.results_by_arm.forEach(result => {
+                        html += `<div class="mb-1">${result.arm || 'N/A'}: ${result.events || result.participants_with_event || 'N/A'}/${result.total_exposed || result.total || 'N/A'}</div>`;
+                    });
+                } else {
+                    html += 'No data';
+                }
+                
+                html += '</td></tr>';
+            });
+            
+            html += '</tbody></table></div>';
+            return html;
+        }
+        
+        function formatMetadata(data) {
+            const meta = data.metadata || data.extraction_metadata || {};
+            const conf = data.confidence_scores || {};
+            
+            let html = '<div class="space-y-4">';
+            
+            // Extraction Methods - Prominent Display
+            html += '<div class="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">';
+            html += '<h4 class="font-semibold text-gray-900 mb-3">📊 Extraction Methods Used</h4>';
+            html += '<div class="grid grid-cols-2 gap-3">';
+            
+            const methods = meta.extraction_methods || [];
+            html += `<div><p class="text-xs text-gray-600">PDF Methods</p><p class="font-semibold text-sm">${methods.filter(m => m.includes('pdfplumber') || m.includes('ocr')).join(', ') || 'None'}</p></div>`;
+            html += `<div><p class="text-xs text-gray-600">LLM Model</p><p class="font-semibold text-sm">${meta.llm_model || 'N/A'}</p></div>`;
+            html += `<div><p class="text-xs text-gray-600">Tables Extracted</p><p class="font-semibold text-sm">${meta.tables_found || 0} tables</p></div>`;
+            html += `<div><p class="text-xs text-gray-600">PDF Pages</p><p class="font-semibold text-sm">${meta.pdf_pages || 0} pages</p></div>`;
+            html += `<div><p class="text-xs text-gray-600">LLM Tokens Used</p><p class="font-semibold text-sm">${meta.llm_tokens || 'N/A'}</p></div>`;
+            html += `<div><p class="text-xs text-gray-600">LLM Status</p><p class="font-semibold text-sm">${meta.llm_finish_reason || 'N/A'}</p></div>`;
+            
+            html += '</div>';
+            
+            // Warning if response was truncated
+            if (meta.llm_finish_reason === 'length') {
+                html += '<div class="mt-3 bg-yellow-100 border border-yellow-300 rounded p-3">';
+                html += '<p class="text-sm text-yellow-900"><strong>⚠️ Warning:</strong> LLM response was truncated due to token limit. Some data may be incomplete.</p>';
+                html += '</div>';
+            }
+            
+            // Warning if no tables found
+            if (!meta.tables_found || meta.tables_found === 0) {
+                html += '<div class="mt-3 bg-orange-100 border border-orange-300 rounded p-3">';
+                html += '<p class="text-sm text-orange-900"><strong>⚠️ No tables extracted.</strong> This may result in missing statistical data like confidence intervals and sample sizes.</p>';
+                html += '</div>';
+            }
+            
+            html += '</div>';
+            
+            // Confidence Scores - Detailed Breakdown
+            if (conf && conf.by_section) {
+                html += '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4">';
+                html += '<h4 class="font-semibold text-gray-900 mb-3">🎯 Confidence Scores (Data Completeness)</h4>';
+                html += '<div class="space-y-2">';
+                
+                const sections = [
+                    { key: 'identification', label: 'Study Identification', desc: 'Title, authors, journal, year' },
+                    { key: 'design', label: 'Study Design', desc: 'Blinding, randomization, sites, duration' },
+                    { key: 'interventions', label: 'Interventions', desc: 'Arms, dosing, sample sizes' },
+                    { key: 'outcomes', label: 'Outcomes (Most Critical)', desc: 'Results, effect estimates, CIs' }
+                ];
+                
+                sections.forEach(section => {
+                    const score = conf.by_section[section.key] || 0;
+                    const percentage = (score * 100).toFixed(0);
+                    let colorClass = 'bg-red-500';
+                    if (score >= 0.7) colorClass = 'bg-green-500';
+                    else if (score >= 0.4) colorClass = 'bg-yellow-500';
+                    
+                    html += `<div>`;
+                    html += `<div class="flex items-center justify-between mb-1">`;
+                    html += `<span class="text-sm font-medium">${section.label}</span>`;
+                    html += `<span class="text-sm font-bold">${percentage}%</span>`;
+                    html += `</div>`;
+                    html += `<div class="w-full bg-gray-200 rounded-full h-2">`;
+                    html += `<div class="${colorClass} h-2 rounded-full" style="width: ${percentage}%"></div>`;
+                    html += `</div>`;
+                    html += `<p class="text-xs text-gray-500 mt-1">${section.desc}</p>`;
+                    html += `</div>`;
+                });
+                
+                html += '</div></div>';
+            }
+            
+            // Basic Metadata
+            html += '<div class="grid grid-cols-2 gap-4 mt-4">';
+            html += `<div><p class="text-sm font-semibold text-gray-600">Extraction Date</p><p class="text-gray-900 text-sm">${data.extraction_date ? new Date(data.extraction_date).toLocaleString() : 'N/A'}</p></div>`;
+            html += `<div><p class="text-sm font-semibold text-gray-600">Study ID</p><p class="text-gray-900">${data.id || 'N/A'}</p></div>`;
+            html += '</div>';
+            
+            html += '</div>';
+            
+            return html;
+        }
+        
+        function formatStatisticalMethods(data) {
+            const sm = data.statistical_methods || {};
+            
+            let html = '<div class="grid grid-cols-2 gap-4">';
+            html += `<div><p class="text-sm font-semibold text-gray-600">Primary Analysis Method</p><p class="text-gray-900">${formatValue(sm.primary_analysis_method)}</p></div>`;
+            html += `<div><p class="text-sm font-semibold text-gray-600">Missing Data Handling</p><p class="text-gray-900">${formatValue(sm.missing_data_method)}</p></div>`;
+            html += `<div><p class="text-sm font-semibold text-gray-600">Multiplicity Adjustment</p><p class="text-gray-900">${formatValue(sm.multiplicity_adjustment)}</p></div>`;
+            html += `<div><p class="text-sm font-semibold text-gray-600">Interim Analyses</p><p class="text-gray-900">${formatValue(sm.interim_analyses)}</p></div>`;
+            html += '</div>';
+            
+            if (sm.adjustment_variables && sm.adjustment_variables.length > 0) {
+                html += '<div class="mt-4"><p class="text-sm font-semibold text-gray-600 mb-2">Adjustment Variables (Covariates)</p>';
+                html += '<ul class="list-disc list-inside text-sm text-gray-700">';
+                sm.adjustment_variables.forEach(v => html += `<li>${v}</li>`);
+                html += '</ul></div>';
+            }
+            
+            if (sm.sensitivity_analyses && sm.sensitivity_analyses.length > 0) {
+                html += '<div class="mt-4"><p class="text-sm font-semibold text-gray-600 mb-2">Sensitivity Analyses</p>';
+                html += '<ul class="list-disc list-inside text-sm text-gray-700">';
+                sm.sensitivity_analyses.forEach(s => html += `<li>${s}</li>`);
+                html += '</ul></div>';
+            }
+            
+            return html;
+        }
+        
+        function formatRiskOfBias(data) {
+            const rob = data.risk_of_bias || {};
+            
+            const domains = [
+                {key: 'random_sequence_generation', label: 'Random Sequence Generation (Selection Bias)'},
+                {key: 'allocation_concealment', label: 'Allocation Concealment (Selection Bias)'},
+                {key: 'blinding_participants_personnel', label: 'Blinding of Participants/Personnel (Performance Bias)'},
+                {key: 'blinding_outcome_assessment', label: 'Blinding of Outcome Assessment (Detection Bias)'},
+                {key: 'incomplete_outcome_data', label: 'Incomplete Outcome Data (Attrition Bias)'},
+                {key: 'selective_reporting', label: 'Selective Reporting (Reporting Bias)'},
+                {key: 'other_bias', label: 'Other Sources of Bias'}
+            ];
+            
+            let html = '<div class="space-y-3">';
+            
+            domains.forEach(domain => {
+                const assessment = rob[domain.key];
+                if (assessment) {
+                    // Extract risk level and justification
+                    let risk = 'unclear';
+                    let justification = assessment;
+                    
+                    if (typeof assessment === 'string') {
+                        if (assessment.toLowerCase().includes('low')) risk = 'low';
+                        else if (assessment.toLowerCase().includes('high')) risk = 'high';
+                        else risk = 'unclear';
+                    }
+                    
+                    let borderColor, bgColor, badgeBg, badgeText;
+                    if (risk === 'low') {
+                        borderColor = 'border-green-500';
+                        bgColor = 'bg-green-50';
+                        badgeBg = 'bg-green-200';
+                        badgeText = 'text-green-900';
+                    } else if (risk === 'high') {
+                        borderColor = 'border-red-500';
+                        bgColor = 'bg-red-50';
+                        badgeBg = 'bg-red-200';
+                        badgeText = 'text-red-900';
+                    } else {
+                        borderColor = 'border-yellow-500';
+                        bgColor = 'bg-yellow-50';
+                        badgeBg = 'bg-yellow-200';
+                        badgeText = 'text-yellow-900';
+                    }
+                    
+                    html += `<div class="border-l-4 ${borderColor} ${bgColor} p-3">`;
+                    html += `<div class="flex items-start justify-between">`;
+                    html += `<p class="font-semibold text-sm text-gray-900">${domain.label}</p>`;
+                    html += `<span class="px-2 py-1 rounded text-xs font-bold ${badgeBg} ${badgeText}">${risk.toUpperCase()} RISK</span>`;
+                    html += `</div>`;
+                    html += `<p class="text-xs text-gray-700 mt-2">${justification}</p>`;
+                    html += `</div>`;
+                }
+            });
+            
+            html += '</div>';
+            
+            return html;
+        }
 
         function createSection(title, id, content, isOpen) {
             return `
@@ -318,8 +1162,6 @@
         function downloadExcel() {
             if (extractedData && extractedData.id) {
                 window.location.href = `/api/export/csv/${extractedData.id}`;
-            } else {
-                alert('No study ID available for export');
             }
         }
     </script>
