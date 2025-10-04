@@ -4,7 +4,7 @@ Comprehensive PDF extraction using multiple methods: OCR, LLM, GROBID, Heuristic
 """
 from dotenv import load_dotenv
 load_dotenv()
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import os
@@ -32,6 +32,8 @@ import requests
 # Data Processing
 import numpy as np
 from collections import defaultdict
+import io
+import pandas as pd
 
 app = Flask(__name__)
 CORS(app)
@@ -896,6 +898,272 @@ def init_db():
     """Initialize the database"""
     db.create_all()
     print("Database initialized!")
+
+# Add these imports at the top of app.py (with other imports)
+import io
+from flask import send_file
+import pandas as pd
+
+# Add these routes BEFORE the "if __name__ == '__main__':" line in app.py
+
+@app.route('/api/export/csv/<int:study_id>', methods=['GET'])
+def export_csv(study_id):
+    """Export study data as CSV files (zipped)"""
+    study = Study.query.get_or_404(study_id)
+    
+    # Create multiple CSV files for different data types
+    output = io.BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Study identification sheet
+        study_info = pd.DataFrame([{
+            'Title': study.title,
+            'Authors': ', '.join(study.authors) if study.authors else '',
+            'Journal': study.journal,
+            'Year': study.year,
+            'DOI': study.doi,
+            'Trial Registration': study.trial_registration,
+            'Study Type': study.study_type,
+            'Blinding': study.blinding,
+            'Duration': study.duration
+        }])
+        study_info.to_excel(writer, sheet_name='Study Info', index=False)
+        
+        # Interventions sheet
+        if study.interventions:
+            interventions_data = [{
+                'Arm Name': i.arm_name,
+                'N Randomized': i.n_randomized,
+                'N Analyzed': i.n_analyzed,
+                'Dose': i.dose,
+                'Frequency': i.frequency,
+                'Duration': i.duration
+            } for i in study.interventions]
+            interventions_df = pd.DataFrame(interventions_data)
+            interventions_df.to_excel(writer, sheet_name='Interventions', index=False)
+        
+        # Outcomes sheet
+        if study.outcomes:
+            outcomes_data = []
+            for outcome in study.outcomes:
+                base_data = {
+                    'Outcome Name': outcome.outcome_name,
+                    'Type': outcome.outcome_type,
+                    'Timepoint': outcome.timepoint
+                }
+                
+                # Add effect estimate data if available
+                if outcome.effect_estimate:
+                    base_data.update({
+                        'Effect Type': outcome.effect_estimate.get('type'),
+                        'Effect Estimate': outcome.effect_estimate.get('value'),
+                        'CI Lower': outcome.effect_estimate.get('ci_lower'),
+                        'CI Upper': outcome.effect_estimate.get('ci_upper'),
+                        'P-value': outcome.effect_estimate.get('p_value')
+                    })
+                
+                # Add results by arm
+                if outcome.results_by_arm:
+                    for arm_result in outcome.results_by_arm:
+                        arm_data = base_data.copy()
+                        arm_data.update({
+                            'Arm': arm_result.get('arm'),
+                            'N': arm_result.get('n'),
+                            'Mean': arm_result.get('mean'),
+                            'SD': arm_result.get('sd'),
+                            'Events': arm_result.get('events'),
+                            'Total': arm_result.get('total')
+                        })
+                        outcomes_data.append(arm_data)
+                else:
+                    outcomes_data.append(base_data)
+            
+            outcomes_df = pd.DataFrame(outcomes_data)
+            outcomes_df.to_excel(writer, sheet_name='Outcomes', index=False)
+        
+        # Subgroups sheet
+        if study.subgroups:
+            subgroups_data = []
+            for sg in study.subgroups:
+                if sg.subgroups:
+                    for subgroup in sg.subgroups:
+                        subgroups_data.append({
+                            'Variable': sg.subgroup_variable,
+                            'Subgroup': subgroup.get('subgroup_name'),
+                            'P Interaction': sg.p_interaction,
+                            'Effect': subgroup.get('effect_estimate', {}).get('value'),
+                            'CI Lower': subgroup.get('effect_estimate', {}).get('ci_lower'),
+                            'CI Upper': subgroup.get('effect_estimate', {}).get('ci_upper'),
+                            'P-value': subgroup.get('effect_estimate', {}).get('p_value')
+                        })
+            
+            if subgroups_data:
+                subgroups_df = pd.DataFrame(subgroups_data)
+                subgroups_df.to_excel(writer, sheet_name='Subgroups', index=False)
+        
+        # Adverse events sheet
+        if study.adverse_events:
+            ae_data = []
+            for ae in study.adverse_events:
+                if ae.results_by_arm:
+                    for arm_result in ae.results_by_arm:
+                        ae_data.append({
+                            'Event Name': ae.event_name,
+                            'Severity': ae.severity,
+                            'Arm': arm_result.get('arm'),
+                            'Events': arm_result.get('events'),
+                            'Total': arm_result.get('total')
+                        })
+            
+            if ae_data:
+                ae_df = pd.DataFrame(ae_data)
+                ae_df.to_excel(writer, sheet_name='Adverse Events', index=False)
+    
+    output.seek(0)
+    
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'study_{study_id}_data.xlsx'
+    )
+
+@app.route('/api/export/nma-ready/<int:study_id>', methods=['GET'])
+def export_nma_ready(study_id):
+    """Export study data in NMA-ready format (wide format for meta-analysis software)"""
+    study = Study.query.get_or_404(study_id)
+    
+    output = io.BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # NMA-ready outcomes format (one row per comparison)
+        nma_data = []
+        
+        for outcome in study.outcomes:
+            if outcome.outcome_type == 'primary' and outcome.effect_estimate:
+                row = {
+                    'Study': study.trial_registration or study.title[:50],
+                    'Year': study.year,
+                    'Outcome': outcome.outcome_name,
+                    'Timepoint': outcome.timepoint,
+                    'Effect_Type': outcome.effect_estimate.get('type'),
+                    'Effect_Estimate': outcome.effect_estimate.get('value'),
+                    'CI_Lower': outcome.effect_estimate.get('ci_lower'),
+                    'CI_Upper': outcome.effect_estimate.get('ci_upper'),
+                    'P_Value': outcome.effect_estimate.get('p_value'),
+                    'SE': None  # Calculate if CI available
+                }
+                
+                # Add treatment arms
+                if study.interventions:
+                    for i, intervention in enumerate(study.interventions[:2]):  # First 2 arms
+                        prefix = f'Arm{i+1}_'
+                        row[f'{prefix}Name'] = intervention.arm_name
+                        row[f'{prefix}N'] = intervention.n_analyzed
+                
+                # Add arm-specific results
+                if outcome.results_by_arm:
+                    for i, arm_result in enumerate(outcome.results_by_arm[:2]):
+                        prefix = f'Arm{i+1}_'
+                        row[f'{prefix}Mean'] = arm_result.get('mean')
+                        row[f'{prefix}SD'] = arm_result.get('sd')
+                        row[f'{prefix}Events'] = arm_result.get('events')
+                        row[f'{prefix}Total'] = arm_result.get('total')
+                
+                nma_data.append(row)
+        
+        if nma_data:
+            nma_df = pd.DataFrame(nma_data)
+            nma_df.to_excel(writer, sheet_name='NMA_Ready', index=False)
+        
+        # Add subgroup data in NMA format
+        subgroup_nma = []
+        for sg in study.subgroups:
+            if sg.subgroups:
+                for subgroup in sg.subgroups:
+                    subgroup_nma.append({
+                        'Study': study.trial_registration or study.title[:50],
+                        'Subgroup_Variable': sg.subgroup_variable,
+                        'Subgroup_Name': subgroup.get('subgroup_name'),
+                        'Effect': subgroup.get('effect_estimate', {}).get('value'),
+                        'CI_Lower': subgroup.get('effect_estimate', {}).get('ci_lower'),
+                        'CI_Upper': subgroup.get('effect_estimate', {}).get('ci_upper'),
+                        'P_Value': subgroup.get('effect_estimate', {}).get('p_value'),
+                        'P_Interaction': sg.p_interaction
+                    })
+        
+        if subgroup_nma:
+            subgroup_df = pd.DataFrame(subgroup_nma)
+            subgroup_df.to_excel(writer, sheet_name='Subgroup_NMA', index=False)
+    
+    output.seek(0)
+    
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'study_{study_id}_NMA_ready.xlsx'
+    )
+
+@app.route('/api/export/all-studies/csv', methods=['GET'])
+def export_all_studies_csv():
+    """Export all studies as a single Excel file with multiple sheets"""
+    studies = Study.query.all()
+    
+    if not studies:
+        return jsonify({'error': 'No studies found'}), 404
+    
+    output = io.BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Summary sheet - all studies
+        summary_data = []
+        for study in studies:
+            summary_data.append({
+                'Study_ID': study.id,
+                'Title': study.title,
+                'Year': study.year,
+                'Trial_Registration': study.trial_registration,
+                'Journal': study.journal,
+                'N_Randomized': study.population_data.get('total_randomized') if study.population_data else None,
+                'N_Arms': len(study.interventions),
+                'N_Outcomes': len([o for o in study.outcomes if o.outcome_type == 'primary']),
+                'Extraction_Date': study.extraction_date.strftime('%Y-%m-%d') if study.extraction_date else None
+            })
+        
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_excel(writer, sheet_name='Studies_Summary', index=False)
+        
+        # Combined outcomes from all studies
+        all_outcomes = []
+        for study in studies:
+            for outcome in study.outcomes:
+                if outcome.outcome_type == 'primary':
+                    all_outcomes.append({
+                        'Study_ID': study.id,
+                        'Study': study.trial_registration or study.title[:50],
+                        'Year': study.year,
+                        'Outcome': outcome.outcome_name,
+                        'Timepoint': outcome.timepoint,
+                        'Effect_Type': outcome.effect_estimate.get('type') if outcome.effect_estimate else None,
+                        'Effect': outcome.effect_estimate.get('value') if outcome.effect_estimate else None,
+                        'CI_Lower': outcome.effect_estimate.get('ci_lower') if outcome.effect_estimate else None,
+                        'CI_Upper': outcome.effect_estimate.get('ci_upper') if outcome.effect_estimate else None,
+                        'P_Value': outcome.effect_estimate.get('p_value') if outcome.effect_estimate else None
+                    })
+        
+        if all_outcomes:
+            outcomes_df = pd.DataFrame(all_outcomes)
+            outcomes_df.to_excel(writer, sheet_name='All_Outcomes', index=False)
+    
+    output.seek(0)
+    
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='all_studies_export.xlsx'
+    )
 
 if __name__ == '__main__':
     with app.app_context():
