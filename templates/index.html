@@ -97,95 +97,198 @@
         }
 
         function displayResults(data) {
-            const container = document.getElementById('resultsContainer');
-            container.classList.remove('hidden');
-            
-            let html = `
-                <div class="bg-white rounded-lg shadow-lg p-4 mb-4">
-                    <div class="flex items-center justify-between">
-                        <h2 class="text-xl font-semibold">Extracted Data</h2>
-                        <div class="flex gap-2">
-                            <button onclick="downloadJSON()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">JSON</button>
-                            <button onclick="downloadExcel()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Excel</button>
-                        </div>
+    const container = document.getElementById('resultsContainer');
+    container.classList.remove('hidden');
+    
+    let html = `
+        <div class="bg-white rounded-lg shadow-lg p-4 mb-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-xl font-semibold">Extracted Data - CONSORT Compliant</h2>
+                <div class="flex gap-2">
+                    <button onclick="downloadJSON()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">JSON</button>
+                    <button onclick="downloadExcel()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Excel (All Sheets)</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Study Identification
+    if (data.study_identification) {
+        html += createSection('Study Identification', 'id', `
+            <div class="space-y-2">
+                <h3 class="text-xl font-bold text-gray-900 mb-3">${data.study_identification.title || 'Untitled'}</h3>
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                    <div><span class="font-medium">Authors:</span> ${(data.study_identification.authors || []).join(', ')}</div>
+                    <div><span class="font-medium">Journal:</span> ${data.study_identification.journal || 'N/A'}</div>
+                    <div><span class="font-medium">Year:</span> ${data.study_identification.year || 'N/A'}</div>
+                    <div><span class="font-medium">DOI:</span> ${data.study_identification.doi || 'N/A'}</div>
+                    <div><span class="font-medium">Trial Registration:</span> ${data.study_identification.trial_registration || 'N/A'}</div>
+                </div>
+            </div>
+        `, true);
+    }
+
+    // Study Design
+    if (data.study_design) {
+        html += createSection('Study Design & Methodology', 'design', `
+            <div class="grid grid-cols-2 gap-4 text-sm">
+                <div><span class="font-medium">Design Type:</span> ${data.study_design.type || 'N/A'}</div>
+                <div><span class="font-medium">Blinding:</span> ${data.study_design.blinding || 'N/A'}</div>
+                <div><span class="font-medium">Randomization:</span> ${data.study_design.randomization_method || 'N/A'}</div>
+                <div><span class="font-medium">Allocation Concealment:</span> ${data.study_design.allocation_concealment || 'N/A'}</div>
+                <div><span class="font-medium">Duration:</span> ${data.study_design.duration_total || 'N/A'}</div>
+                <div><span class="font-medium">Country:</span> ${data.study_design.country || 'N/A'}</div>
+            </div>
+        `, true);
+    }
+
+    // Population & Eligibility
+    if (data.population) {
+        html += createSection(`Population (N=${data.population.total_randomized || '?'})`, 'pop', `
+            <div class="grid grid-cols-2 gap-6">
+                <div>
+                    <h4 class="font-semibold text-gray-700 mb-2">Sample Sizes</h4>
+                    <div class="space-y-1 text-sm">
+                        <div><span class="font-medium">Screened:</span> ${data.population.total_screened || 'N/A'}</div>
+                        <div><span class="font-medium">Randomized:</span> ${data.population.total_randomized || 'N/A'}</div>
+                        <div><span class="font-medium">Analyzed (ITT):</span> ${data.population.total_analyzed_itt || 'N/A'}</div>
                     </div>
                 </div>
-            `;
-
-            if (data.study_identification) {
-                html += createSection('Study Identification', 'id', `
-                    <h3 class="text-xl font-bold mb-3">${data.study_identification.title || 'Untitled'}</h3>
-                    <div class="space-y-2 text-sm">
-                        <div><span class="font-medium">Authors:</span> ${(data.study_identification.authors || []).join(', ')}</div>
-                        <div><span class="font-medium">Journal:</span> ${data.study_identification.journal || 'N/A'}</div>
-                        <div><span class="font-medium">Year:</span> ${data.study_identification.year || 'N/A'}</div>
+                <div>
+                    <h4 class="font-semibold text-gray-700 mb-2">Demographics</h4>
+                    <div class="space-y-1 text-sm">
+                        <div><span class="font-medium">Mean Age:</span> ${data.population.age_mean || 'N/A'} ${data.population.age_sd ? '(SD ' + data.population.age_sd + ')' : ''}</div>
+                        <div><span class="font-medium">Male %:</span> ${data.population.sex_male_percent || 'N/A'}</div>
                     </div>
-                `, true);
-            }
+                </div>
+            </div>
+            <div class="mt-4 grid grid-cols-2 gap-4">
+                <div>
+                    <h4 class="font-semibold text-gray-700 mb-2">Inclusion Criteria</h4>
+                    <ul class="list-disc pl-5 text-sm space-y-1">
+                        ${(data.population.inclusion_criteria || []).map(c => `<li>${c}</li>`).join('')}
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-semibold text-gray-700 mb-2">Exclusion Criteria</h4>
+                    <ul class="list-disc pl-5 text-sm space-y-1">
+                        ${(data.population.exclusion_criteria || []).slice(0, 5).map(c => `<li>${c}</li>`).join('')}
+                        ${(data.population.exclusion_criteria || []).length > 5 ? '<li class="text-gray-500">... and more</li>' : ''}
+                    </ul>
+                </div>
+            </div>
+        `, true);
+    }
 
-            if (data.interventions) {
-                html += createSection(`Interventions (${data.interventions.length} arms)`, 'int', `
-                    <div class="grid grid-cols-3 gap-4">
-                        ${data.interventions.map(i => `
-                            <div class="border rounded-lg p-4 bg-gray-50">
-                                <h4 class="font-bold text-blue-700 mb-2">${i.arm_name}</h4>
-                                <div class="text-sm space-y-1">
-                                    <div><span class="font-medium">N Randomized:</span> ${i.n_randomized}</div>
-                                    <div><span class="font-medium">N Analyzed:</span> ${i.n_analyzed}</div>
-                                    <div><span class="font-medium">Duration:</span> ${i.duration}</div>
-                                </div>
+    // Interventions
+    if (data.interventions) {
+        html += createSection(`Interventions (${data.interventions.length} arms)`, 'int', `
+            <div class="grid grid-cols-3 gap-4">
+                ${data.interventions.map((i, idx) => `
+                    <div class="border rounded-lg p-4 bg-gray-50">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">${idx + 1}</span>
+                            <h4 class="font-bold text-blue-700">${i.arm_name}</h4>
+                        </div>
+                        <div class="text-sm space-y-1">
+                            <div><span class="font-medium">N Randomized:</span> ${i.n_randomized || 'N/A'}</div>
+                            <div><span class="font-medium">N Analyzed:</span> ${i.n_analyzed || 'N/A'}</div>
+                            ${i.dose && i.dose !== 'NOT_APPLICABLE' ? `<div><span class="font-medium">Dose:</span> ${i.dose}</div>` : ''}
+                            ${i.frequency && i.frequency !== 'NOT_APPLICABLE' ? `<div><span class="font-medium">Frequency:</span> ${i.frequency}</div>` : ''}
+                            <div><span class="font-medium">Duration:</span> ${i.duration || 'N/A'}</div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `, true);
+    }
+
+    // Primary Outcomes
+    if (data.outcomes && data.outcomes.primary) {
+        html += createSection(`Primary Outcomes (${data.outcomes.primary.length})`, 'out', 
+            data.outcomes.primary.map(o => `
+                <div class="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <h4 class="font-bold text-blue-900 mb-2">${o.outcome_name}</h4>
+                    <div class="text-sm mb-2">
+                        <span class="font-medium">Timepoint:</span> ${o.timepoint || 'N/A'}
+                        ${o.measurement_tool ? ` | <span class="font-medium">Tool:</span> ${o.measurement_tool}` : ''}
+                    </div>
+                    ${o.effect_estimate || o.between_group_comparison ? `
+                        <div class="bg-white p-3 rounded border border-blue-300">
+                            <h5 class="font-semibold text-sm mb-2">Effect Estimate</h5>
+                            <div class="grid grid-cols-2 gap-2 text-sm">
+                                ${o.effect_estimate ? `
+                                    <div><span class="font-medium">Comparison:</span> ${o.effect_estimate.comparison || 'N/A'}</div>
+                                    <div><span class="font-medium">Effect:</span> <span class="font-bold text-blue-700">${o.effect_estimate.effect_estimate || 'N/A'}</span> (${o.effect_estimate.effect_measure || 'N/A'})</div>
+                                    <div><span class="font-medium">95% CI:</span> [${o.effect_estimate.ci_95_lower || '?'}, ${o.effect_estimate.ci_95_upper || '?'}]</div>
+                                    <div><span class="font-medium">P-value:</span> <span class="font-bold">${o.effect_estimate.p_value || 'N/A'}</span></div>
+                                ` : ''}
+                                ${o.between_group_comparison ? `
+                                    <div><span class="font-medium">Comparison:</span> ${o.between_group_comparison.comparison || 'N/A'}</div>
+                                    <div><span class="font-medium">Effect:</span> <span class="font-bold text-blue-700">${o.between_group_comparison.effect_estimate || 'N/A'}</span></div>
+                                    <div><span class="font-medium">95% CI:</span> [${o.between_group_comparison.ci_95_lower}, ${o.between_group_comparison.ci_95_upper}]</div>
+                                    <div><span class="font-medium">P-value:</span> ${o.between_group_comparison.p_value}</div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join(''), true);
+    }
+
+    // Subgroup Analyses
+    if (data.subgroup_analyses && data.subgroup_analyses.length > 0) {
+        html += createSection(`Subgroup Analyses (${data.subgroup_analyses.length})`, 'sub',
+            data.subgroup_analyses.map(sg => `
+                <div class="mb-4 p-4 bg-green-50 rounded-lg border border-green-200">
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="font-bold text-green-900">Subgroup Variable: ${sg.subgroup_variable}</h4>
+                        <span class="text-sm bg-green-200 px-2 py-1 rounded">P interaction: ${sg.p_interaction}</span>
+                    </div>
+                    <div class="space-y-2 mt-3">
+                        ${(sg.subgroups || []).map(s => `
+                            <div class="bg-white p-3 rounded border border-green-300">
+                                <div class="font-semibold text-gray-800 mb-1">${s.subgroup_name}</div>
+                                ${s.subgroup_definition ? `<div class="text-xs text-gray-600 mb-2">${s.subgroup_definition}</div>` : ''}
+                                ${s.effect_estimate ? `
+                                    <div class="grid grid-cols-3 gap-2 text-sm">
+                                        <div><span class="font-medium">Effect:</span> ${s.effect_estimate.value}</div>
+                                        <div><span class="font-medium">95% CI:</span> [${s.effect_estimate.ci_lower}, ${s.effect_estimate.ci_upper}]</div>
+                                        <div><span class="font-medium">P:</span> ${s.effect_estimate.p_value}</div>
+                                    </div>
+                                ` : ''}
                             </div>
                         `).join('')}
                     </div>
-                `, true);
-            }
+                </div>
+            `).join(''), true);
+    }
 
-            if (data.outcomes && data.outcomes.primary) {
-                html += createSection(`Primary Outcomes (${data.outcomes.primary.length})`, 'out', 
-                    data.outcomes.primary.map(o => `
-                        <div class="mb-4 p-4 bg-blue-50 rounded-lg">
-                            <h4 class="font-bold text-blue-900 mb-2">${o.outcome_name}</h4>
-                            ${o.effect_estimate ? `
-                                <div class="bg-white p-3 rounded text-sm">
-                                    <div><span class="font-medium">Effect:</span> ${o.effect_estimate.effect_estimate} (${o.effect_estimate.effect_measure})</div>
-                                    <div><span class="font-medium">95% CI:</span> [${o.effect_estimate.ci_95_lower}, ${o.effect_estimate.ci_95_upper}]</div>
-                                    <div><span class="font-medium">P-value:</span> ${o.effect_estimate.p_value}</div>
+    // Adverse Events
+    if (data.adverse_events && data.adverse_events.length > 0) {
+        html += createSection(`Adverse Events (${data.adverse_events.length})`, 'ae',
+            `<div class="space-y-3">
+                ${data.adverse_events.map(ae => `
+                    <div class="p-3 bg-yellow-50 rounded border border-yellow-200">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="font-semibold text-gray-800">${ae.event_name}</div>
+                            <span class="text-xs bg-yellow-200 px-2 py-1 rounded">${ae.severity || ae.category || 'N/A'}</span>
+                        </div>
+                        <div class="grid grid-cols-${(ae.results_by_arm || []).length} gap-2 text-sm">
+                            ${(ae.results_by_arm || []).map(result => `
+                                <div class="bg-white p-2 rounded">
+                                    <div class="font-medium text-xs text-gray-600">${result.arm}</div>
+                                    <div>${result.events || result.participants_with_event} / ${result.total_exposed}</div>
                                 </div>
-                            ` : ''}
+                            `).join('')}
                         </div>
-                    `).join(''), true);
-            }
-
-            if (data.subgroup_analyses && data.subgroup_analyses.length > 0) {
-                html += createSection(`Subgroup Analyses (${data.subgroup_analyses.length})`, 'sub',
-                    data.subgroup_analyses.map(sg => `
-                        <div class="mb-4 p-4 bg-green-50 rounded-lg">
-                            <h4 class="font-bold text-green-900">Variable: ${sg.subgroup_variable}</h4>
-                            <div class="text-sm"><span class="font-medium">P interaction:</span> ${sg.p_interaction}</div>
-                            <div class="mt-2 space-y-2">
-                                ${(sg.subgroups || []).map(s => `
-                                    <div class="bg-white p-2 rounded text-sm">
-                                        <div class="font-semibold">${s.subgroup_name}</div>
-                                        ${s.effect_estimate ? `<div>Effect: ${s.effect_estimate.value}, P: ${s.effect_estimate.p_value}</div>` : ''}
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                    `).join(''), true);
-            }
-
-            if (data.population) {
-                html += createSection('Population', 'pop', `
-                    <div class="grid grid-cols-2 gap-4 text-sm">
-                        <div><span class="font-medium">Total Randomized:</span> ${data.population.total_randomized}</div>
-                        <div><span class="font-medium">Mean Age:</span> ${data.population.age_mean}</div>
-                        <div><span class="font-medium">Male %:</span> ${data.population.sex_male_percent}</div>
                     </div>
-                `, false);
-            }
+                `).join('')}
+            </div>`, false);
+    }
 
-            container.innerHTML = html;
-        }
+    container.innerHTML = html;
+}
 
         function createSection(title, id, content, isOpen) {
             return `
