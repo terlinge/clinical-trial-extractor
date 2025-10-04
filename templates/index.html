@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clinical Trial Extractor</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background: #f3f4f6; }
+        h1 { color: #2563eb; }
+        .status { padding: 10px; border-radius: 5px; margin: 20px 0; background: #d1fae5; color: #065f46; }
+        .upload-area { border: 2px dashed #ccc; padding: 40px; text-align: center; border-radius: 10px; background: white; }
+        button { background: #2563eb; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #1d4ed8; }
+        #result { margin-top: 20px; background: white; padding: 20px; border-radius: 10px; }
+        pre { background: #f8f9fa; padding: 15px; border-radius: 5px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>🏥 Clinical Trial Data Extractor</h1>
+    
+    <div class="status">
+        ✅ Backend Connected - Ready to Extract Data!
+    </div>
+    
+    <div class="upload-area">
+        <h2>Upload Clinical Trial PDF</h2>
+        <input type="file" id="pdfFile" accept=".pdf" style="margin: 20px 0;" />
+        <br>
+        <button onclick="extractData()">Extract All Trial Data</button>
+    </div>
+    
+    <div id="result"></div>
+    
+    <script>
+        async function extractData() {
+            const fileInput = document.getElementById('pdfFile');
+            const resultDiv = document.getElementById('result');
+            
+            if (!fileInput.files[0]) {
+                alert('Please select a PDF file first!');
+                return;
+            }
+            
+            resultDiv.innerHTML = '<p>⏳ Extracting data with AI... This may take 30-60 seconds...</p>';
+            
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/api/extract', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.innerHTML = 
+                        '<h3>✅ Extraction Complete!</h3>' +
+                        '<p><strong>Methods Used:</strong> ' + (data.metadata?.extraction_methods?.join(', ') || 'N/A') + '</p>' +
+                        '<button onclick="downloadJSON()" style="margin-bottom: 15px;">💾 Download JSON</button>' +
+                        '<h4>Extracted Data:</h4>' +
+                        '<pre>' + JSON.stringify(data.data, null, 2) + '</pre>';
+                    window.extractedData = data.data;
+                } else {
+                    resultDiv.innerHTML = '<p style="color: red;">❌ Error: ' + (data.error || 'Unknown error') + '</p>';
+                }
+            } catch (error) {
+                resultDiv.innerHTML = '<p style="color: red;">❌ Error: ' + error.message + '</p>';
+            }
+        }
+        
+        function downloadJSON() {
+            const blob = new Blob([JSON.stringify(window.extractedData, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'extracted_trial_data.json';
+            a.click();
+        }
+    </script>
+</body>
+</html>
