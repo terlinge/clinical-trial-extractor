@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Clinical Trial Extractor - Review System</title>
+    <title>Clinical Trial Extractor</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -13,15 +13,22 @@
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-6">
     <div class="max-w-7xl mx-auto">
+        <!-- Header -->
         <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
             <h1 class="text-3xl font-bold text-gray-800">Clinical Trial Data Extractor</h1>
-            <p class="text-gray-600">AI-powered extraction with dual independent review</p>
+            <p class="text-gray-600">AI-powered extraction for Network Meta-Analyses</p>
             
+            <!-- Tabs -->
             <div class="flex gap-6 mt-4 border-b">
-                <button onclick="showTab('extract')" id="tab-extract" class="pb-2 font-medium tab-active">Extract New</button>
-                <button onclick="showTab('library')" id="tab-library" class="pb-2 font-medium text-gray-600 hover:text-blue-600">Studies Library</button>
-                <button onclick="showTab('review')" id="tab-review" class="pb-2 font-medium text-gray-600 hover:text-blue-600">Review System</button>
-                <button onclick="showTab('compare')" id="tab-compare" class="pb-2 font-medium text-gray-600 hover:text-blue-600">Compare Studies</button>
+                <button onclick="showTab('extract')" id="tab-extract" class="pb-2 font-medium tab-active">
+                    Extract New
+                </button>
+                <button onclick="showTab('library')" id="tab-library" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                    Studies Library
+                </button>
+                <button onclick="showTab('compare')" id="tab-compare" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                    Compare Studies
+                </button>
             </div>
         </div>
 
@@ -29,72 +36,64 @@
         <div id="extractTab" class="tab-content">
             <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
                 <h2 class="text-xl font-semibold mb-4">Upload Clinical Trial PDF</h2>
+                
                 <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition cursor-pointer" onclick="document.getElementById('pdfFile').click()">
                     <input type="file" id="pdfFile" accept=".pdf" class="hidden" />
                     <p class="text-lg font-medium text-gray-700" id="fileName">Click to upload PDF</p>
                 </div>
-                <button onclick="extractData()" class="w-full mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Extract All Trial Data</button>
-                <div id="loadingDiv" class="hidden mt-4 p-4 bg-blue-50 rounded-lg"><span class="text-blue-800">Extracting...</span></div>
-                <div id="errorDiv" class="hidden mt-4 p-4 bg-red-50 rounded-lg"><p class="text-red-800" id="errorText"></p></div>
+
+                <button onclick="extractData()" class="w-full mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+                    Extract All Trial Data
+                </button>
+
+                <div id="loadingDiv" class="hidden mt-4 p-4 bg-blue-50 rounded-lg">
+                    <div class="space-y-3">
+                        <p class="text-blue-800 font-semibold">Extracting... 30-60 seconds</p>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex items-center gap-2">
+                                <div id="status-pdf" class="w-3 h-3 bg-gray-300 rounded-full"></div>
+                                <span>PDF Text Extraction (PDFPlumber)</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div id="status-tables" class="w-3 h-3 bg-gray-300 rounded-full"></div>
+                                <span>Table Extraction (PDFPlumber + Camelot)</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div id="status-ocr" class="w-3 h-3 bg-gray-300 rounded-full"></div>
+                                <span>OCR (if needed for scanned PDFs)</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div id="status-llm" class="w-3 h-3 bg-gray-300 rounded-full"></div>
+                                <span>AI Extraction (GPT-4)</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div id="status-save" class="w-3 h-3 bg-gray-300 rounded-full"></div>
+                                <span>Saving to Database</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="errorDiv" class="hidden mt-4 p-4 bg-red-50 rounded-lg">
+                    <p class="text-red-800" id="errorText"></p>
+                </div>
             </div>
+
             <div id="resultsContainer" class="hidden"></div>
         </div>
 
         <!-- Library Tab -->
         <div id="libraryTab" class="tab-content hidden">
-            <div class="bg-white rounded-lg shadow-lg p-6">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
                 <div class="flex items-center justify-between mb-4">
                     <h2 class="text-xl font-semibold">Studies Library</h2>
-                    <button onclick="exportAllStudies()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Export All</button>
-                </div>
-                <div id="studiesLibrary"><p class="text-gray-500">Loading studies...</p></div>
-            </div>
-        </div>
-
-        <!-- Review Tab -->
-        <div id="reviewTab" class="tab-content hidden">
-            <div class="bg-white rounded-lg shadow-lg p-6">
-                <h2 class="text-xl font-semibold mb-4">Review System - Dual Independent Review</h2>
-                
-                <div class="mb-6">
-                    <h3 class="font-semibold mb-3">Manage Reviewers</h3>
-                    <div class="flex gap-3 mb-3">
-                        <input type="text" id="newReviewerName" placeholder="Reviewer Name" class="flex-1 px-4 py-2 border rounded-lg">
-                        <input type="email" id="newReviewerEmail" placeholder="Email (optional)" class="flex-1 px-4 py-2 border rounded-lg">
-                        <button onclick="addReviewer()" class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Add Reviewer</button>
-                    </div>
-                    <div id="reviewersList"></div>
+                    <button onclick="exportAllStudies()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                        Export All Studies
+                    </button>
                 </div>
                 
-                <div class="mb-6">
-                    <h3 class="font-semibold mb-3">Select Study to Review</h3>
-                    <select id="studyToReview" class="w-full px-4 py-2 border rounded-lg mb-3" onchange="loadStudyForReview()">
-                        <option value="">-- Select a study --</option>
-                    </select>
-                    
-                    <div id="reviewAssignment" class="hidden">
-                        <h4 class="font-semibold mb-2">Assign Reviewers</h4>
-                        <div class="grid grid-cols-2 gap-3 mb-3">
-                            <div>
-                                <label class="text-sm text-gray-600">Reviewer A</label>
-                                <select id="assignReviewerA" class="w-full px-4 py-2 border rounded-lg"><option value="">-- Select --</option></select>
-                            </div>
-                            <div>
-                                <label class="text-sm text-gray-600">Reviewer B</label>
-                                <select id="assignReviewerB" class="w-full px-4 py-2 border rounded-lg"><option value="">-- Select --</option></select>
-                            </div>
-                        </div>
-                        <button onclick="assignReviewers()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Assign & Start Review</button>
-                    </div>
-                </div>
-                
-                <div id="reviewInterface" class="hidden">
-                    <div class="mb-4">
-                        <label class="text-sm text-gray-600">I am reviewing as:</label>
-                        <select id="currentReviewer" class="ml-2 px-4 py-2 border rounded-lg" onchange="loadMyReviews()"><option value="">-- Select --</option></select>
-                    </div>
-                    <div id="reviewFieldsContainer"></div>
-                    <button onclick="markReviewComplete()" class="w-full mt-4 px-6 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700">Mark My Review as Complete</button>
+                <div id="studiesLibrary" class="space-y-3">
+                    <p class="text-gray-500">Loading studies...</p>
                 </div>
             </div>
         </div>
@@ -103,275 +102,679 @@
         <div id="compareTab" class="tab-content hidden">
             <div class="bg-white rounded-lg shadow-lg p-6">
                 <h2 class="text-xl font-semibold mb-4">Compare Studies</h2>
-                <div id="compareSelection"></div>
+                
+                <div class="mb-4">
+                    <p class="text-sm text-gray-600 mb-2">Select 2-4 studies to compare:</p>
+                    <div id="compareSelection" class="space-y-2"></div>
+                </div>
+                
+                <button onclick="performComparison()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    Compare Selected Studies
+                </button>
+                
+                <div id="comparisonResults" class="mt-6"></div>
             </div>
         </div>
     </div>
 
     <script>
-        let allReviewers = [];
-        let currentStudyForReview = null;
-        let currentReviewerId = null;
-        let currentStudyData = null;
-        let allStudies = [];
-        let myReviews = {};
         const fileInput = document.getElementById('pdfFile');
+        let extractedData = null;
+        let allStudies = [];
+        let selectedForComparison = [];
 
-        document.addEventListener('DOMContentLoaded', () => loadReviewers());
-
-        async function loadReviewers() {
-            try {
-                const res = await fetch('/api/reviewers');
-                const data = await res.json();
-                allReviewers = data.reviewers;
-                displayReviewers();
-                populateReviewerDropdowns();
-            } catch (e) {
-                console.error('Error loading reviewers:', e);
+        fileInput.addEventListener('change', function() {
+            if (this.files && this.files[0]) {
+                document.getElementById('fileName').textContent = this.files[0].name;
             }
-        }
-
-        function displayReviewers() {
-            const container = document.getElementById('reviewersList');
-            if (allReviewers.length === 0) {
-                container.innerHTML = '<p class="text-sm text-gray-500 mt-2">No reviewers yet.</p>';
-                return;
-            }
-            container.innerHTML = `<div class="mt-3 p-3 bg-gray-50 rounded-lg"><p class="text-sm font-semibold mb-2">Current Reviewers:</p><div class="flex flex-wrap gap-2">${allReviewers.map(r => `<span class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm">${r.name}</span>`).join('')}</div></div>`;
-        }
-
-        function populateReviewerDropdowns() {
-            ['assignReviewerA', 'assignReviewerB', 'currentReviewer'].forEach(id => {
-                const select = document.getElementById(id);
-                select.innerHTML = '<option value="">-- Select --</option>' + allReviewers.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
-            });
-        }
-
-        async function addReviewer() {
-            const name = document.getElementById('newReviewerName').value.trim();
-            const email = document.getElementById('newReviewerEmail').value.trim();
-            if (!name) return alert('Enter reviewer name');
-            
-            try {
-                const res = await fetch('/api/reviewers', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, email})});
-                const result = await res.json();
-                if (result.success) {
-                    document.getElementById('newReviewerName').value = '';
-                    document.getElementById('newReviewerEmail').value = '';
-                    await loadReviewers();
-                    alert('Reviewer added!');
-                } else {
-                    alert(result.error);
-                }
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
-        }
-
-        async function loadStudyForReview() {
-            const studyId = document.getElementById('studyToReview').value;
-            if (!studyId) {
-                document.getElementById('reviewAssignment').classList.add('hidden');
-                document.getElementById('reviewInterface').classList.add('hidden');
-                return;
-            }
-            
-            currentStudyForReview = parseInt(studyId);
-            const res = await fetch(`/api/studies/${studyId}`);
-            currentStudyData = await res.json();
-            
-            const statusRes = await fetch(`/api/studies/${studyId}/review-status`);
-            const status = await statusRes.json();
-            
-            if (!status.reviewer_a || !status.reviewer_b) {
-                document.getElementById('reviewAssignment').classList.remove('hidden');
-                document.getElementById('reviewInterface').classList.add('hidden');
-            } else {
-                document.getElementById('reviewAssignment').classList.add('hidden');
-                document.getElementById('reviewInterface').classList.remove('hidden');
-                buildReviewInterface();
-            }
-        }
-
-        async function assignReviewers() {
-            const a = parseInt(document.getElementById('assignReviewerA').value);
-            const b = parseInt(document.getElementById('assignReviewerB').value);
-            if (!a || !b) return alert('Select both reviewers');
-            if (a === b) return alert('Select different reviewers');
-            
-            const res = await fetch(`/api/studies/${currentStudyForReview}/assign-reviewers`, {
-                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({reviewer_a_id: a, reviewer_b_id: b})
-            });
-            const result = await res.json();
-            if (result.success) {
-                alert('Reviewers assigned!');
-                loadStudyForReview();
-            } else {
-                alert(result.error);
-            }
-        }
-
-        function buildReviewInterface() {
-            const fields = extractReviewableFields(currentStudyData);
-            document.getElementById('reviewFieldsContainer').innerHTML = `<div class="space-y-4">${fields.map(f => createFieldReviewHTML(f)).join('')}</div>`;
-        }
-
-        function extractReviewableFields(data) {
-            const fields = [];
-            const add = (path, label, value, section) => {
-                if (value !== null && value !== undefined && value !== '') fields.push({path, label, value, section});
-            };
-            
-            const si = data.study_identification || {};
-            add('study_identification.title', 'Title', si.title, 'identification');
-            add('study_identification.year', 'Year', si.year, 'identification');
-            
-            (data.interventions || []).forEach((int, i) => {
-                add(`interventions.${i}.arm_name`, `Arm ${i+1} Name`, int.arm_name, 'interventions');
-                add(`interventions.${i}.dose`, `Arm ${i+1} Dose`, int.dose, 'interventions');
-            });
-            
-            return fields;
-        }
-
-        function createFieldReviewHTML(field) {
-            const rev = myReviews[field.path] || {};
-            const decision = rev.decision || '';
-            
-            return `<div class="border rounded-lg p-3" id="field-${field.path.replace(/\./g, '-')}">
-                <p class="font-semibold mb-2">${field.label}</p>
-                <div class="mb-3 p-2 bg-blue-50 rounded"><p class="text-xs font-semibold">AI:</p><p class="text-sm">${field.value}</p></div>
-                <div class="mb-3">
-                    <div class="flex gap-3 mb-2">
-                        <label class="flex items-center"><input type="radio" name="decision-${field.path}" value="ACCEPT" ${decision === 'ACCEPT' ? 'checked' : ''} class="mr-2"><span class="text-sm">Accept</span></label>
-                        <label class="flex items-center"><input type="radio" name="decision-${field.path}" value="REJECT" ${decision === 'REJECT' ? 'checked' : ''} class="mr-2"><span class="text-sm">Reject</span></label>
-                        <label class="flex items-center"><input type="radio" name="decision-${field.path}" value="MODIFY" ${decision === 'MODIFY' ? 'checked' : ''} class="mr-2"><span class="text-sm">Modify</span></label>
-                    </div>
-                    <div id="modify-${field.path.replace(/\./g, '-')}" class="${decision === 'MODIFY' ? '' : 'hidden'}">
-                        <input type="text" id="value-${field.path.replace(/\./g, '-')}" value="${rev.reviewer_value || ''}" placeholder="Your value" class="w-full px-3 py-2 border rounded-lg text-sm mb-2">
-                    </div>
-                </div>
-                <textarea id="notes-${field.path.replace(/\./g, '-')}" class="w-full px-3 py-2 border rounded-lg text-sm mb-2" rows="2" placeholder="Notes">${rev.notes || ''}</textarea>
-                <button onclick="saveFieldReview('${field.path}', '${field.label}', '${field.section}', ${JSON.stringify(field.value).replace(/"/g, '&quot;')})" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">Save</button>
-            </div>`;
-        }
-
-        async function saveFieldReview(fieldPath, fieldLabel, section, aiValue) {
-            const radios = document.getElementsByName(`decision-${fieldPath}`);
-            let decision = '';
-            for (const r of radios) if (r.checked) { decision = r.value; break; }
-            if (!decision) return alert('Select a decision');
-            
-            const reviewerValue = document.getElementById(`value-${fieldPath.replace(/\./g, '-')}`).value;
-            const notes = document.getElementById(`notes-${fieldPath.replace(/\./g, '-')}`).value;
-            if (decision === 'MODIFY' && !reviewerValue) return alert('Enter your value');
-            if (!currentReviewerId) return alert('Select which reviewer you are');
-            
-            const res = await fetch(`/api/studies/${currentStudyForReview}/submit-review`, {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({reviewer_id: currentReviewerId, field_path: fieldPath, field_label: fieldLabel, section, ai_value: aiValue, decision, reviewer_value: decision === 'MODIFY' ? reviewerValue : null, notes})
-            });
-            const result = await res.json();
-            if (result.success) {
-                myReviews[fieldPath] = {decision, reviewer_value: reviewerValue, notes};
-                alert('Saved!');
-            } else {
-                alert('Error: ' + result.error);
-            }
-        }
-
-        async function loadMyReviews() {
-            currentReviewerId = parseInt(document.getElementById('currentReviewer').value);
-            if (!currentReviewerId) return;
-            
-            const res = await fetch(`/api/studies/${currentStudyForReview}/my-reviews/${currentReviewerId}`);
-            const data = await res.json();
-            myReviews = data.reviews;
-            buildReviewInterface();
-        }
-
-        async function markReviewComplete() {
-            if (!currentReviewerId) return alert('Select reviewer');
-            if (!confirm('Mark complete?')) return;
-            
-            const res = await fetch(`/api/studies/${currentStudyForReview}/complete-review/${currentReviewerId}`, {method: 'POST'});
-            const result = await res.json();
-            if (result.success) {
-                alert('Review complete!');
-            } else {
-                alert(result.error);
-            }
-        }
+        });
 
         function showTab(tabName) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
-            document.querySelectorAll('[id^="tab-"]').forEach(b => {
-                b.classList.remove('tab-active');
-                b.classList.add('text-gray-600');
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.add('hidden'));
+            document.querySelectorAll('[id^="tab-"]').forEach(btn => {
+                btn.classList.remove('tab-active');
+                btn.classList.add('text-gray-600');
             });
+            
+            // Show selected tab
             document.getElementById(tabName + 'Tab').classList.remove('hidden');
             document.getElementById('tab-' + tabName).classList.add('tab-active');
             document.getElementById('tab-' + tabName).classList.remove('text-gray-600');
             
-            if (tabName === 'review') loadReviewTab();
-            if (tabName === 'library') loadStudiesLibrary();
+            // Load data for that tab
+            if (tabName === 'library') {
+                loadStudiesLibrary();
+            } else if (tabName === 'compare') {
+                loadCompareView();
+            }
         }
 
-        async function loadReviewTab() {
-            const res = await fetch('/api/studies');
-            const data = await res.json();
-            allStudies = data.studies;
-            document.getElementById('studyToReview').innerHTML = '<option value="">-- Select --</option>' + 
-                allStudies.map(s => `<option value="${s.id}">${s.study_identification.title || 'Untitled'} (${s.study_identification.year || 'N/A'})</option>`).join('');
+        async function extractData() {
+            if (!fileInput.files || !fileInput.files[0]) {
+                showError('Please select a PDF file first!');
+                return;
+            }
+
+            document.getElementById('loadingDiv').classList.remove('hidden');
+            document.getElementById('errorDiv').classList.add('hidden');
+            
+            // Reset all status indicators
+            ['status-pdf', 'status-tables', 'status-ocr', 'status-llm', 'status-save'].forEach(id => {
+                document.getElementById(id).className = 'w-3 h-3 bg-gray-300 rounded-full';
+            });
+            
+            // Simulate progress indicators
+            setTimeout(() => {
+                document.getElementById('status-pdf').className = 'w-3 h-3 bg-green-500 rounded-full';
+            }, 500);
+            
+            setTimeout(() => {
+                document.getElementById('status-tables').className = 'w-3 h-3 bg-green-500 rounded-full';
+            }, 1500);
+            
+            setTimeout(() => {
+                document.getElementById('status-llm').className = 'w-3 h-3 bg-yellow-500 rounded-full animate-pulse';
+            }, 2500);
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/api/extract', { method: 'POST', body: formData });
+                const result = await response.json();
+
+                if (result.data || result.success) {
+                    // Update progress indicators
+                    document.getElementById('status-llm').className = 'w-3 h-3 bg-green-500 rounded-full';
+                    document.getElementById('status-save').className = 'w-3 h-3 bg-green-500 rounded-full';
+                    
+                    // Store extracted data with metadata
+                    extractedData = result.data || {};
+                    extractedData.id = result.study_id;
+                    
+                    // Ensure metadata is included
+                    if (result.metadata) {
+                        extractedData.extraction_metadata = result.metadata;
+                        extractedData.confidence_scores = result.metadata.confidence_scores;
+                    }
+                    
+                    displayResults(extractedData);
+                } else {
+                    // Mark failed status
+                    ['status-pdf', 'status-tables', 'status-ocr', 'status-llm', 'status-save'].forEach(id => {
+                        const el = document.getElementById(id);
+                        if (el.className.includes('gray')) {
+                            el.className = 'w-3 h-3 bg-red-500 rounded-full';
+                        }
+                    });
+                    showError(result.error || 'Extraction failed');
+                }
+            } catch (error) {
+                // Mark all as failed
+                ['status-pdf', 'status-tables', 'status-ocr', 'status-llm', 'status-save'].forEach(id => {
+                    document.getElementById(id).className = 'w-3 h-3 bg-red-500 rounded-full';
+                });
+                showError('Error: ' + error.message);
+            } finally {
+                document.getElementById('loadingDiv').classList.add('hidden');
+            }
+        }
+
+        function displayResults(data) {
+            const container = document.getElementById('resultsContainer');
+            container.classList.remove('hidden');
+            
+            let html = '';
+            
+            // Standards compliance header
+            html += '<div class="bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg p-4 mb-4">';
+            html += '<div class="flex items-start justify-between">';
+            html += '<div>';
+            html += '<h3 class="text-lg font-bold mb-1">📊 Extracted Clinical Trial Data</h3>';
+            html += '<p class="text-sm opacity-90">Following CONSORT Guidelines & Cochrane Standards for Systematic Reviews and Meta-Analysis</p>';
+            html += '</div>';
+            html += '<div class="text-right text-xs">';
+            html += '<div>✓ Network Meta-Analysis Ready</div>';
+            html += '<div>✓ All Statistical Parameters</div>';
+            html += '<div>✓ Missing Data Highlighted</div>';
+            html += '</div>';
+            html += '</div></div>';
+            
+            // Action buttons
+            html += '<div class="mb-4 flex gap-3">';
+            html += '<button onclick="downloadJSON()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">📥 Download JSON</button>';
+            html += '<button onclick="downloadExcel()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium">📊 Download Excel</button>';
+            if (data.id) {
+                html += `<button onclick="reExtractStudy(${data.id})" class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium">🔄 Re-extract This Study</button>`;
+            }
+            html += '</div>';
+            
+            // Data quality indicator
+            const confidence = (data.confidence_scores?.overall || 0);
+            const confidencePercent = (confidence * 100).toFixed(0);
+            let confidenceBg, confidenceBorder, confidenceTextColor, confidenceText;
+            
+            if (confidence > 0.7) {
+                confidenceBg = 'bg-green-50';
+                confidenceBorder = 'border-green-200';
+                confidenceTextColor = 'text-green-900';
+                confidenceText = 'High Confidence';
+            } else if (confidence > 0.4) {
+                confidenceBg = 'bg-yellow-50';
+                confidenceBorder = 'border-yellow-200';
+                confidenceTextColor = 'text-yellow-900';
+                confidenceText = 'Medium Confidence';
+            } else {
+                confidenceBg = 'bg-red-50';
+                confidenceBorder = 'border-red-200';
+                confidenceTextColor = 'text-red-900';
+                confidenceText = 'Low Confidence - Manual Review Recommended';
+            }
+            
+            html += `<div class="${confidenceBg} border-2 ${confidenceBorder} rounded-lg p-3 mb-4">`;
+            html += `<div class="flex items-center gap-2">`;
+            html += `<span class="font-semibold ${confidenceTextColor}">Extraction Quality:</span>`;
+            html += `<span class="${confidenceTextColor}">${confidenceText} (${confidencePercent}%)</span>`;
+            html += `<span class="text-xs text-gray-700 ml-auto">⚠️ Always verify critical values against source PDF</span>`;
+            html += '</div></div>';
+            
+            // All the detailed sections
+            html += createSection('Study Identification', 'study-id', formatStudyIdentification(data), true);
+            html += createSection('Study Design & Methodology', 'study-design', formatStudyDesign(data), false);
+            html += createSection('Population & Eligibility', 'population', formatPopulation(data), true);
+            html += createSection('Interventions (CONSORT Flow)', 'interventions', formatInterventions(data), true);
+            html += createSection('Primary Outcomes (All Statistical Parameters)', 'primary-outcomes', formatPrimaryOutcomes(data), true);
+            html += createSection('Secondary Outcomes', 'secondary-outcomes', formatSecondaryOutcomes(data), false);
+            
+            if (data.subgroup_analyses && data.subgroup_analyses.length > 0) {
+                html += createSection('Subgroup Analyses', 'subgroups', formatSubgroups(data), false);
+            }
+            
+            if (data.adverse_events && data.adverse_events.length > 0) {
+                html += createSection('Adverse Events', 'adverse-events', formatAdverseEvents(data), false);
+            }
+            
+            html += createSection('Extraction Metadata', 'metadata', formatMetadata(data), false);
+            
+            container.innerHTML = html;
+        }
+
+        function createSection(title, id, content, isOpen) {
+            return `
+                <div class="bg-white rounded-lg shadow-lg mb-4 overflow-hidden">
+                    <button onclick="toggleSection('${id}-content')" class="w-full px-6 py-4 flex items-center justify-between bg-gradient-to-r from-blue-50 to-white hover:from-blue-100">
+                        <div class="flex items-center gap-2">
+                            <span id="${id}-content-icon">${isOpen ? '▼' : '▶'}</span>
+                            <span class="font-semibold text-gray-800">${title}</span>
+                        </div>
+                    </button>
+                    <div id="${id}-content" class="collapsible-content ${isOpen ? 'open' : ''}">
+                        <div class="px-6 py-4">${content}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function toggleSection(id) {
+            const content = document.getElementById(id);
+            const icon = document.getElementById(id + '-icon');
+            content.classList.toggle('open');
+            icon.textContent = content.classList.contains('open') ? '▼' : '▶';
+        }
+
+        function formatValue(value, suffix = '') {
+            if (value === null || value === undefined || value === '' || value === 'NOT_REPORTED' || value === 'UNCERTAIN') {
+                return '<span class="text-red-600 font-semibold">NOT REPORTED</span>';
+            }
+            if (value === 'N/A' || value === 'NA') {
+                return '<span class="text-gray-400">N/A</span>';
+            }
+            return value + suffix;
+        }
+
+        function formatStudyIdentification(data) {
+            const si = data.study_identification || {};
+            return `
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Title</p>
+                        <p class="text-gray-900">${si.title || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Trial Registration</p>
+                        <p class="text-gray-900">${si.trial_registration || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Authors</p>
+                        <p class="text-gray-900 text-sm">${Array.isArray(si.authors) ? si.authors.join(', ') : (si.authors || 'Not reported')}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Journal</p>
+                        <p class="text-gray-900">${si.journal || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Year</p>
+                        <p class="text-gray-900">${si.year || 'Not reported'}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">DOI</p>
+                        <p class="text-gray-900 text-sm">${si.doi || 'Not reported'}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function formatStudyDesign(data) {
+            const sd = data.study_design || {};
+            let html = `
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Study Type</p>
+                        <p class="text-gray-900">${formatValue(sd.type)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Blinding</p>
+                        <p class="text-gray-900">${formatValue(sd.blinding)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Randomization Method</p>
+                        <p class="text-gray-900">${formatValue(sd.randomization_method || sd.randomization)}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Duration</p>
+                        <p class="text-gray-900">${formatValue(sd.duration || sd.duration_total)}</p>
+                    </div>
+                </div>
+            `;
+            return html;
+        }
+
+        function formatPopulation(data) {
+            const pop = data.population || {};
+            return `
+                <div class="grid grid-cols-3 gap-4 mb-6">
+                    <div class="bg-blue-50 p-3 rounded">
+                        <p class="text-sm font-semibold text-gray-600">Screened</p>
+                        <p class="text-2xl font-bold text-blue-600">${pop.total_screened || 'N/A'}</p>
+                    </div>
+                    <div class="bg-green-50 p-3 rounded">
+                        <p class="text-sm font-semibold text-gray-600">Randomized</p>
+                        <p class="text-2xl font-bold text-green-600">${pop.total_randomized || 'N/A'}</p>
+                    </div>
+                    <div class="bg-purple-50 p-3 rounded">
+                        <p class="text-sm font-semibold text-gray-600">Analyzed (ITT)</p>
+                        <p class="text-2xl font-bold text-purple-600">${pop.total_analyzed_itt || 'N/A'}</p>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Age (Mean ± SD)</p>
+                        <p class="text-gray-900">${pop.age_mean || 'N/A'}${pop.age_sd ? ' ± ' + pop.age_sd : ''}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-600">Male %</p>
+                        <p class="text-gray-900">${pop.sex_male_percent || 'N/A'}${pop.sex_male_percent ? '%' : ''}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function formatInterventions(data) {
+            const interventions = data.interventions || [];
+            if (interventions.length === 0) return '<p class="text-gray-500">No intervention data extracted</p>';
+            
+            let html = '<div class="overflow-x-auto mb-4">';
+            html += '<table class="w-full text-sm border border-gray-300">';
+            html += '<thead class="bg-gray-100"><tr>';
+            html += '<th class="border border-gray-300 p-2 text-left">Arm</th>';
+            html += '<th class="border border-gray-300 p-2 text-left">Dose</th>';
+            html += '<th class="border border-gray-300 p-2 text-center bg-blue-50">Randomized</th>';
+            html += '<th class="border border-gray-300 p-2 text-center bg-green-50">Analyzed</th>';
+            html += '<th class="border border-gray-300 p-2 text-center">Duration</th>';
+            html += '</tr></thead><tbody>';
+            
+            interventions.forEach((intervention, idx) => {
+                html += '<tr class="hover:bg-gray-50">';
+                html += `<td class="border border-gray-300 p-2 font-semibold">${intervention.arm_name || 'Arm ' + (idx + 1)}</td>`;
+                html += `<td class="border border-gray-300 p-2">${formatValue(intervention.dose)}</td>`;
+                html += `<td class="border border-gray-300 p-2 text-center bg-blue-50 font-semibold">${formatValue(intervention.n_randomized)}</td>`;
+                html += `<td class="border border-gray-300 p-2 text-center bg-green-50 font-semibold">${formatValue(intervention.n_analyzed)}</td>`;
+                html += `<td class="border border-gray-300 p-2 text-center">${formatValue(intervention.duration)}</td>`;
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table></div>';
+            return html;
+        }
+
+        function formatPrimaryOutcomes(data) {
+            const outcomes = data.outcomes?.primary || [];
+            if (outcomes.length === 0) return '<p class="text-gray-500">No primary outcomes extracted</p>';
+            
+            let html = '';
+            outcomes.forEach((outcome, idx) => {
+                html += `<div class="mb-6 ${idx > 0 ? 'pt-6 border-t border-gray-200' : ''}">`;
+                html += `<h4 class="font-semibold text-lg text-gray-900 mb-3">${outcome.outcome_name || 'Outcome ' + (idx + 1)}</h4>`;
+                
+                if (outcome.results_by_arm && outcome.results_by_arm.length > 0) {
+                    html += '<div class="overflow-x-auto">';
+                    html += '<table class="w-full text-xs border border-gray-300">';
+                    html += '<thead class="bg-gray-100"><tr>';
+                    html += '<th class="border p-2">Arm</th>';
+                    html += '<th class="border p-2">N</th>';
+                    html += '<th class="border p-2 bg-blue-50">Mean</th>';
+                    html += '<th class="border p-2 bg-blue-50">SD</th>';
+                    html += '<th class="border p-2 bg-green-50">Events</th>';
+                    html += '<th class="border p-2 bg-green-50">Total</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    outcome.results_by_arm.forEach(result => {
+                        html += '<tr>';
+                        html += `<td class="border p-2 font-medium">${result.arm || 'N/A'}</td>`;
+                        html += `<td class="border p-2">${formatValue(result.n)}</td>`;
+                        html += `<td class="border p-2 bg-blue-50">${formatValue(result.mean)}</td>`;
+                        html += `<td class="border p-2 bg-blue-50">${formatValue(result.sd)}</td>`;
+                        html += `<td class="border p-2 bg-green-50">${formatValue(result.events)}</td>`;
+                        html += `<td class="border p-2 bg-green-50">${formatValue(result.total)}</td>`;
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table></div>';
+                }
+                
+                if (outcome.effect_estimate || outcome.between_group_comparison) {
+                    const effect = outcome.effect_estimate || outcome.between_group_comparison;
+                    html += '<div class="mt-3 p-3 bg-blue-50 rounded">';
+                    html += '<p class="font-semibold mb-2">Effect Estimate</p>';
+                    html += '<p class="text-sm">Measure: ' + formatValue(effect.effect_measure || effect.type) + '</p>';
+                    html += '<p class="text-sm">Estimate: ' + formatValue(effect.effect_estimate || effect.value) + '</p>';
+                    html += '<p class="text-sm">95% CI: [' + formatValue(effect.ci_95_lower || effect.ci_lower) + ', ' + formatValue(effect.ci_95_upper || effect.ci_upper) + ']</p>';
+                    html += '<p class="text-sm">P-value: ' + formatValue(effect.p_value) + '</p>';
+                    html += '</div>';
+                }
+                
+                html += '</div>';
+            });
+            
+            return html;
+        }
+
+        function formatSecondaryOutcomes(data) {
+            const outcomes = data.outcomes?.secondary || [];
+            if (outcomes.length === 0) return '<p class="text-gray-500">No secondary outcomes extracted</p>';
+            return formatPrimaryOutcomes({outcomes: {primary: outcomes}});
+        }
+
+        function formatSubgroups(data) {
+            const subgroups = data.subgroup_analyses || [];
+            if (subgroups.length === 0) return '<p class="text-gray-500">No subgroup analyses</p>';
+            
+            let html = '';
+            subgroups.forEach((sg, idx) => {
+                html += `<div class="mb-4 ${idx > 0 ? 'pt-4 border-t border-gray-200' : ''}">`;
+                html += `<h4 class="font-semibold text-gray-900 mb-2">${sg.subgroup_variable || 'Subgroup ' + (idx + 1)}</h4>`;
+                
+                if (sg.p_interaction) {
+                    html += `<p class="text-sm text-gray-600 mb-2">P for interaction: ${sg.p_interaction}</p>`;
+                }
+                
+                html += '</div>';
+            });
+            
+            return html;
+        }
+
+        function formatAdverseEvents(data) {
+            const aes = data.adverse_events || [];
+            if (aes.length === 0) return '<p class="text-gray-500">No adverse events reported</p>';
+            
+            let html = '<div class="overflow-x-auto"><table class="w-full text-sm border">';
+            html += '<thead class="bg-gray-50"><tr>';
+            html += '<th class="border p-2 text-left">Event</th>';
+            html += '<th class="border p-2 text-center">Severity</th>';
+            html += '</tr></thead><tbody>';
+            
+            aes.forEach(ae => {
+                html += '<tr>';
+                html += `<td class="border p-2">${ae.event_name || 'Unnamed'}</td>`;
+                html += `<td class="border p-2 text-center">${ae.severity || 'N/A'}</td>`;
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table></div>';
+            return html;
+        }
+
+        function formatMetadata(data) {
+            const meta = data.extraction_metadata || data.metadata || {};
+            const conf = data.confidence_scores || meta.confidence_scores || {};
+            
+            // Build detailed extraction info
+            let extractionMethods = 'N/A';
+            if (meta.extraction_methods && Array.isArray(meta.extraction_methods)) {
+                extractionMethods = meta.extraction_methods.join(', ');
+            }
+            
+            let html = '<div class="space-y-4">';
+            
+            // Extraction methods used
+            html += '<div class="bg-blue-50 border border-blue-200 rounded-lg p-4">';
+            html += '<h4 class="font-semibold text-gray-900 mb-3">📊 Extraction Methods Used</h4>';
+            html += '<div class="grid grid-cols-2 gap-3 text-sm">';
+            html += `<div><span class="font-medium">Methods:</span> ${extractionMethods}</div>`;
+            html += `<div><span class="font-medium">LLM Model:</span> ${meta.llm_model || 'N/A'}</div>`;
+            html += `<div><span class="font-medium">Tables Found:</span> ${meta.tables_found || 0}</div>`;
+            html += `<div><span class="font-medium">PDF Pages:</span> ${meta.pdf_pages || 0}</div>`;
+            html += `<div><span class="font-medium">LLM Tokens:</span> ${meta.llm_tokens || 'N/A'}</div>`;
+            html += `<div><span class="font-medium">Completion:</span> ${meta.llm_finish_reason || 'N/A'}</div>`;
+            html += '</div></div>';
+            
+            // Confidence scores breakdown
+            if (conf.by_section) {
+                html += '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4">';
+                html += '<h4 class="font-semibold text-gray-900 mb-3">🎯 Confidence Scores by Section</h4>';
+                html += '<div class="space-y-2">';
+                
+                const sections = [
+                    { key: 'identification', label: 'Study Identification' },
+                    { key: 'design', label: 'Study Design' },
+                    { key: 'interventions', label: 'Interventions' },
+                    { key: 'outcomes', label: 'Outcomes' }
+                ];
+                
+                sections.forEach(section => {
+                    const score = conf.by_section[section.key] || 0;
+                    const percentage = (score * 100).toFixed(0);
+                    let bgColor = score >= 0.7 ? 'bg-green-500' : score >= 0.4 ? 'bg-yellow-500' : 'bg-red-500';
+                    
+                    html += '<div>';
+                    html += `<div class="flex justify-between mb-1 text-sm">`;
+                    html += `<span>${section.label}</span>`;
+                    html += `<span class="font-bold">${percentage}%</span>`;
+                    html += '</div>';
+                    html += `<div class="w-full bg-gray-200 rounded-full h-2">`;
+                    html += `<div class="${bgColor} h-2 rounded-full" style="width: ${percentage}%"></div>`;
+                    html += '</div></div>';
+                });
+                
+                html += '</div></div>';
+            }
+            
+            // Basic info
+            html += '<div class="grid grid-cols-2 gap-4 mt-4">';
+            html += '<div>';
+            html += '<p class="text-sm font-semibold text-gray-600">Extraction Date</p>';
+            html += `<p class="text-gray-900">${data.extraction_date ? new Date(data.extraction_date).toLocaleString() : 'N/A'}</p>`;
+            html += '</div>';
+            html += '<div>';
+            html += '<p class="text-sm font-semibold text-gray-600">Overall Confidence</p>';
+            html += `<p class="text-gray-900 font-bold text-lg">${conf.overall !== undefined ? (conf.overall * 100).toFixed(0) + '%' : 'N/A'}</p>`;
+            html += '</div>';
+            html += '</div>';
+            
+            html += '</div>';
+            return html;
         }
 
         async function loadStudiesLibrary() {
-            const res = await fetch('/api/studies');
-            const data = await res.json();
-            allStudies = data.studies;
+            try {
+                const response = await fetch('/api/studies');
+                const data = await response.json();
+                allStudies = data.studies;
+                displayStudiesLibrary(allStudies);
+            } catch (error) {
+                document.getElementById('studiesLibrary').innerHTML = 
+                    '<p class="text-red-600">Error loading studies</p>';
+            }
+        }
+
+        function displayStudiesLibrary(studies) {
             const container = document.getElementById('studiesLibrary');
             
-            if (allStudies.length === 0) {
-                container.innerHTML = '<p class="text-gray-500">No studies. Upload a PDF first.</p>';
+            if (studies.length === 0) {
+                container.innerHTML = '<p class="text-gray-500">No studies found. Upload a PDF to get started.</p>';
                 return;
             }
             
-            container.innerHTML = allStudies.map(s => `
-                <div class="border rounded-lg p-4 mb-3 hover:bg-gray-50">
+            container.innerHTML = studies.map(study => `
+                <div class="border rounded-lg p-4 hover:bg-gray-50">
                     <div class="flex items-start justify-between">
                         <div class="flex-1">
-                            <h3 class="font-semibold text-gray-900">${s.study_identification.title || 'Untitled'}</h3>
-                            <p class="text-sm text-gray-600">${s.study_identification.year || 'N/A'} | ${s.interventions.length} arms</p>
-                            <p class="text-xs text-gray-500 mt-1">Extracted: ${s.extraction_date ? new Date(s.extraction_date).toLocaleDateString() : 'N/A'}</p>
+                            <h3 class="font-semibold text-gray-900">${study.study_identification.title || 'Untitled'}</h3>
+                            <p class="text-sm text-gray-600">
+                                ${study.study_identification.year || 'N/A'} | 
+                                ${study.study_identification.journal || 'Unknown journal'} | 
+                                ${study.interventions.length} arms
+                            </p>
+                            <p class="text-xs text-gray-500 mt-1">
+                                Extracted: ${study.extraction_date ? new Date(study.extraction_date).toLocaleDateString() : 'N/A'}
+                            </p>
                         </div>
                         <div class="flex gap-2">
-                            <button onclick="viewStudy(${s.id})" class="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200">View</button>
-                            <button onclick="reExtractStudy(${s.id})" class="px-3 py-1 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200">Re-extract</button>
-                            <button onclick="downloadStudyExcel(${s.id})" class="px-3 py-1 text-sm bg-green-100 text-green-700 rounded hover:bg-green-200">Excel</button>
-                            <button onclick="deleteStudy(${s.id})" class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200">Delete</button>
+                            <button onclick="viewStudy(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
+                                View
+                            </button>
+                            <button onclick="reExtractStudy(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200">
+                                Re-extract
+                            </button>
+                            <button onclick="downloadStudyExcel(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-green-100 text-green-700 rounded hover:bg-green-200">
+                                Excel
+                            </button>
+                            <button onclick="deleteStudy(${study.id})" 
+                                    class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200">
+                                Delete
+                            </button>
                         </div>
                     </div>
                 </div>
             `).join('');
         }
 
+        function loadCompareView() {
+            if (allStudies.length === 0) {
+                loadStudiesLibrary().then(() => populateCompareSelection());
+            } else {
+                populateCompareSelection();
+            }
+        }
+
+        function populateCompareSelection() {
+            const container = document.getElementById('compareSelection');
+            container.innerHTML = allStudies.map(study => `
+                <label class="flex items-center gap-2 p-2 hover:bg-gray-50 rounded">
+                    <input type="checkbox" value="${study.id}" onchange="toggleCompareSelection(${study.id})"
+                           ${selectedForComparison.includes(study.id) ? 'checked' : ''}>
+                    <span class="text-sm">${study.study_identification.title || 'Untitled'} (${study.study_identification.year})</span>
+                </label>
+            `).join('');
+        }
+
+        function toggleCompareSelection(studyId) {
+            if (selectedForComparison.includes(studyId)) {
+                selectedForComparison = selectedForComparison.filter(id => id !== studyId);
+            } else {
+                selectedForComparison.push(studyId);
+            }
+        }
+
+        async function performComparison() {
+            if (selectedForComparison.length < 2) {
+                alert('Please select at least 2 studies to compare');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/studies/compare', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({study_ids: selectedForComparison})
+                });
+                const data = await response.json();
+                displayComparison(data);
+            } catch (error) {
+                alert('Comparison failed: ' + error.message);
+            }
+        }
+
+        function displayComparison(data) {
+            const container = document.getElementById('comparisonResults');
+            
+            container.innerHTML = `
+                <h3 class="font-semibold text-lg mb-4">Comparison Results</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full border">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="border p-2 text-left">Study</th>
+                                <th class="border p-2 text-left">Year</th>
+                                <th class="border p-2 text-left">Interventions</th>
+                                <th class="border p-2 text-left">Sample Size</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.studies.map(study => `
+                                <tr>
+                                    <td class="border p-2 text-sm">${(study.study_identification.title || 'Untitled').substring(0, 50)}...</td>
+                                    <td class="border p-2">${study.study_identification.year || 'N/A'}</td>
+                                    <td class="border p-2 text-sm">${study.interventions.map(i => i.arm_name).join(', ')}</td>
+                                    <td class="border p-2">${study.population?.total_randomized || 'N/A'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
         async function viewStudy(studyId) {
             try {
                 const response = await fetch(`/api/studies/${studyId}`);
                 const study = await response.json();
-                alert('Study loaded: ' + study.study_identification.title);
+                extractedData = study;
+                showTab('extract');
+                displayResults(study);
             } catch (error) {
                 alert('Error loading study');
             }
         }
 
         async function reExtractStudy(studyId) {
-            if (!confirm('Re-extract this study? This will overwrite existing data.')) return;
+            if (!confirm('Re-extract this study?\n\nThis will overwrite existing data and take 30-60 seconds.\n\nContinue?')) {
+                return;
+            }
             
-            alert('Re-extraction started. This may take 30-60 seconds...');
+            alert('Re-extraction started. Please wait 30-60 seconds...');
             
             try {
-                const response = await fetch(`/api/studies/${studyId}/re-extract`, {method: 'POST'});
+                const response = await fetch(`/api/studies/${studyId}/re-extract`, {
+                    method: 'POST'
+                });
+                
                 const result = await response.json();
                 
                 if (result.success) {
@@ -389,17 +792,20 @@
             const study = allStudies.find(s => s.id === studyId);
             const studyTitle = study ? (study.study_identification.title || 'this study') : 'this study';
             
-            if (!confirm(`DELETE STUDY?\n\n"${studyTitle}"\n\nThis will permanently delete all data. This CANNOT be undone!\n\nContinue?`)) {
+            if (!confirm(`DELETE STUDY?\n\n"${studyTitle}"\n\nThis will permanently delete all data.\n\nThis CANNOT be undone!\n\nContinue?`)) {
                 return;
             }
             
             try {
-                const response = await fetch(`/api/studies/${studyId}`, {method: 'DELETE'});
+                const response = await fetch(`/api/studies/${studyId}`, {
+                    method: 'DELETE'
+                });
+                
                 const result = await response.json();
                 
                 if (result.success) {
                     allStudies = allStudies.filter(s => s.id !== studyId);
-                    loadStudiesLibrary();
+                    displayStudiesLibrary(allStudies);
                     alert('Study deleted successfully!');
                 } else {
                     alert('Delete failed: ' + (result.error || 'Unknown error'));
@@ -417,35 +823,26 @@
             window.location.href = '/api/export/all-studies';
         }
 
-        async function extractData() {
-            if (!fileInput.files || !fileInput.files[0]) return alert('Select PDF first');
-            document.getElementById('loadingDiv').classList.remove('hidden');
-            
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            
-            try {
-                const res = await fetch('/api/extract', {method: 'POST', body: formData});
-                const result = await res.json();
-                if (result.data) {
-                    alert('Extraction complete! Study ID: ' + result.study_id);
-                    showTab('library');
-                    loadStudiesLibrary();
-                } else {
-                    alert('Error: ' + result.error);
-                }
-            } catch (e) {
-                alert('Error: ' + e.message);
-            } finally {
-                document.getElementById('loadingDiv').classList.add('hidden');
+        function downloadJSON() {
+            if (!extractedData) return;
+            const blob = new Blob([JSON.stringify(extractedData, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'trial_data.json';
+            a.click();
+        }
+
+        function downloadExcel() {
+            if (extractedData && extractedData.id) {
+                window.location.href = `/api/export/csv/${extractedData.id}`;
             }
         }
 
-        fileInput.addEventListener('change', function() {
-            if (this.files && this.files[0]) {
-                document.getElementById('fileName').textContent = this.files[0].name;
-            }
-        });
+        function showError(message) {
+            document.getElementById('errorText').textContent = message;
+            document.getElementById('errorDiv').classList.remove('hidden');
+        }
     </script>
 </body>
 </html>
