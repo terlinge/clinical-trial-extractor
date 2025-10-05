@@ -1172,23 +1172,272 @@ def _serialize_study(study: Study) -> Dict:
     
     return serialized
 
-# Export endpoints (simplified - keeping only essential ones)
+# Export endpoints - FIXED COMPREHENSIVE EXPORT
 @app.route('/api/export/csv/<int:study_id>', methods=['GET'])
 def export_csv(study_id):
-    """Export study data as Excel file"""
+    """Export study data as comprehensive Excel file with ALL extracted data"""
     study = Study.query.get_or_404(study_id)
     
     output = io.BytesIO()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Study info sheet
+        # Sheet 1: Study Overview (Complete identification)
         study_info = pd.DataFrame([{
+            'Study_ID': study.id,
             'Title': study.title,
-            'Year': study.year,
+            'Authors': ', '.join(study.authors) if study.authors else 'N/A',
             'Journal': study.journal,
-            'Trial Registration': study.trial_registration
+            'Year': study.year,
+            'DOI': study.doi,
+            'Trial_Registration': study.trial_registration,
+            'Study_Type': study.study_type,
+            'Blinding': study.blinding,
+            'Randomization_Method': study.randomization,
+            'Study_Duration': study.duration,
+            'PDF_Filename': study.pdf_filename if hasattr(study, 'pdf_filename') else 'N/A',
+            'Extraction_Date': study.extraction_date.strftime('%Y-%m-%d %H:%M') if study.extraction_date else 'N/A',
+            'Overall_Confidence_%': round(study.confidence_scores.get('overall', 0) * 100, 1) if study.confidence_scores else 0
         }])
-        study_info.to_excel(writer, sheet_name='Study Info', index=False)
+        study_info.to_excel(writer, sheet_name='Study Overview', index=False)
+        
+        # Sheet 2: Population & Eligibility
+        if study.population_data:
+            pop_df = pd.DataFrame([{
+                'Total_Screened': study.population_data.get('total_screened'),
+                'Total_Randomized': study.population_data.get('total_randomized'),
+                'Total_Analyzed_ITT': study.population_data.get('total_analyzed_itt'),
+                'Total_Analyzed_PP': study.population_data.get('total_analyzed_pp'),
+                'Age_Mean': study.population_data.get('age_mean'),
+                'Age_SD': study.population_data.get('age_sd'),
+                'Age_Median': study.population_data.get('age_median'),
+                'Age_Range': study.population_data.get('age_range'),
+                'Male_N': study.population_data.get('sex_male_n'),
+                'Male_Percent': study.population_data.get('sex_male_percent'),
+                'Inclusion_Criteria': '; '.join(study.population_data.get('inclusion_criteria', [])) if isinstance(study.population_data.get('inclusion_criteria'), list) else study.population_data.get('inclusion_criteria'),
+                'Exclusion_Criteria': '; '.join(study.population_data.get('exclusion_criteria', [])) if isinstance(study.population_data.get('exclusion_criteria'), list) else study.population_data.get('exclusion_criteria')
+            }])
+            pop_df.to_excel(writer, sheet_name='Population', index=False)
+        
+        # Sheet 3: Interventions/Arms (CONSORT Flow)
+        if study.interventions:
+            int_data = []
+            for i, intervention in enumerate(study.interventions, 1):
+                # Calculate dropouts safely
+                dropout_n = None
+                dropout_percent = None
+                if intervention.n_randomized and intervention.n_analyzed:
+                    try:
+                        n_rand = int(intervention.n_randomized) if intervention.n_randomized else None
+                        n_anal = int(intervention.n_analyzed) if intervention.n_analyzed else None
+                        if n_rand and n_anal and n_rand > 0:
+                            dropout_n = n_rand - n_anal
+                            dropout_percent = round((dropout_n / n_rand * 100), 1)
+                    except (ValueError, TypeError):
+                        pass
+                
+                int_data.append({
+                    'Arm_Number': i,
+                    'Arm_Name': intervention.arm_name,
+                    'N_Randomized': intervention.n_randomized,
+                    'N_Analyzed': intervention.n_analyzed,
+                    'Drug/Intervention': intervention.arm_name,  # Parsing from arm name
+                    'Dose': intervention.dose,
+                    'Frequency': intervention.frequency,
+                    'Duration': intervention.duration,
+                    'Dropout_N': dropout_n,
+                    'Dropout_%': dropout_percent
+                })
+            pd.DataFrame(int_data).to_excel(writer, sheet_name='Interventions', index=False)
+        
+        # Sheet 4: Primary Outcomes (Full Statistical Detail)
+        primary_outcomes = [o for o in study.outcomes if o.outcome_type == 'primary']
+        if primary_outcomes:
+            outcome_rows = []
+            for outcome in primary_outcomes:
+                # Base outcome info
+                base_info = {
+                    'Outcome_Name': outcome.outcome_name,
+                    'Timepoint': outcome.timepoint
+                }
+                
+                # Add effect estimates if available
+                if outcome.effect_estimate:
+                    effect = outcome.effect_estimate
+                    base_info.update({
+                        'Effect_Type': effect.get('effect_measure') or effect.get('type'),
+                        'Effect_Estimate': effect.get('effect_estimate') or effect.get('value'),
+                        'CI_95_Lower': effect.get('ci_95_lower') or effect.get('ci_lower'),
+                        'CI_95_Upper': effect.get('ci_95_upper') or effect.get('ci_upper'),
+                        'P_Value': effect.get('p_value'),
+                        'Statistical_Test': effect.get('statistical_test')
+                    })
+                
+                # Add results by arm
+                if outcome.results_by_arm:
+                    for arm_result in outcome.results_by_arm:
+                        row = base_info.copy()
+                        row.update({
+                            'Arm': arm_result.get('arm'),
+                            'N_Analyzed': arm_result.get('n'),
+                            'Mean': arm_result.get('mean'),
+                            'SD': arm_result.get('sd'),
+                            'SE': arm_result.get('se'),
+                            'Median': arm_result.get('median'),
+                            'Q1': arm_result.get('q1'),
+                            'Q3': arm_result.get('q3'),
+                            'IQR': arm_result.get('iqr'),
+                            'Min': arm_result.get('min'),
+                            'Max': arm_result.get('max'),
+                            'Events': arm_result.get('events'),
+                            'Total': arm_result.get('total'),
+                            'Percent': arm_result.get('percent')
+                        })
+                        outcome_rows.append(row)
+                else:
+                    outcome_rows.append(base_info)
+            
+            if outcome_rows:
+                pd.DataFrame(outcome_rows).to_excel(writer, sheet_name='Primary Outcomes', index=False)
+        
+        # Sheet 5: Secondary Outcomes
+        secondary_outcomes = [o for o in study.outcomes if o.outcome_type == 'secondary']
+        if secondary_outcomes:
+            sec_rows = []
+            for outcome in secondary_outcomes:
+                base_info = {
+                    'Outcome_Name': outcome.outcome_name,
+                    'Timepoint': outcome.timepoint
+                }
+                
+                if outcome.effect_estimate:
+                    effect = outcome.effect_estimate
+                    base_info.update({
+                        'Effect_Type': effect.get('effect_measure') or effect.get('type'),
+                        'Effect_Estimate': effect.get('effect_estimate') or effect.get('value'),
+                        'CI_95_Lower': effect.get('ci_95_lower') or effect.get('ci_lower'),
+                        'CI_95_Upper': effect.get('ci_95_upper') or effect.get('ci_upper'),
+                        'P_Value': effect.get('p_value')
+                    })
+                
+                if outcome.results_by_arm:
+                    for arm_result in outcome.results_by_arm:
+                        row = base_info.copy()
+                        row.update({
+                            'Arm': arm_result.get('arm'),
+                            'N': arm_result.get('n'),
+                            'Mean': arm_result.get('mean'),
+                            'SD': arm_result.get('sd'),
+                            'Events': arm_result.get('events'),
+                            'Total': arm_result.get('total')
+                        })
+                        sec_rows.append(row)
+                else:
+                    sec_rows.append(base_info)
+            
+            if sec_rows:
+                pd.DataFrame(sec_rows).to_excel(writer, sheet_name='Secondary Outcomes', index=False)
+        
+        # Sheet 6: Adverse Events
+        if study.adverse_events:
+            ae_rows = []
+            for ae in study.adverse_events:
+                base_ae = {
+                    'Event_Name': ae.event_name,
+                    'Severity': ae.severity
+                }
+                
+                if ae.results_by_arm:
+                    for arm_result in ae.results_by_arm:
+                        row = base_ae.copy()
+                        
+                        # Convert to numbers safely
+                        participants = arm_result.get('participants_with_event')
+                        total = arm_result.get('total_exposed')
+                        
+                        # Calculate percentage safely
+                        percent = None
+                        if participants and total:
+                            try:
+                                participants_num = float(participants) if isinstance(participants, (int, float, str)) else None
+                                total_num = float(total) if isinstance(total, (int, float, str)) else None
+                                if participants_num and total_num and total_num > 0:
+                                    percent = round((participants_num / total_num * 100), 1)
+                            except (ValueError, TypeError):
+                                percent = None
+                        
+                        row.update({
+                            'Arm': arm_result.get('arm'),
+                            'Events': arm_result.get('events'),
+                            'Participants_With_Event': arm_result.get('participants_with_event'),
+                            'Total_Exposed': arm_result.get('total_exposed'),
+                            'Percent': percent
+                        })
+                        ae_rows.append(row)
+                else:
+                    ae_rows.append(base_ae)
+            
+            if ae_rows:
+                pd.DataFrame(ae_rows).to_excel(writer, sheet_name='Adverse Events', index=False)
+        
+        # Sheet 7: Subgroup Analyses
+        if study.subgroups:
+            sg_rows = []
+            for sg in study.subgroups:
+                base_sg = {
+                    'Subgroup_Variable': sg.subgroup_variable,
+                    'P_Interaction': sg.p_interaction
+                }
+                
+                if sg.subgroups:
+                    # Flatten nested subgroup data
+                    for subgroup in sg.subgroups:
+                        row = base_sg.copy()
+                        row['Subgroup_Name'] = subgroup.get('subgroup_name')
+                        row['Subgroup_Definition'] = subgroup.get('subgroup_definition')
+                        
+                        # Add effect estimates
+                        if subgroup.get('effect_estimate'):
+                            effect = subgroup['effect_estimate']
+                            row.update({
+                                'Effect_Type': effect.get('type'),
+                                'Effect_Value': effect.get('value'),
+                                'CI_Lower': effect.get('ci_lower'),
+                                'CI_Upper': effect.get('ci_upper'),
+                                'P_Value': effect.get('p_value')
+                            })
+                        
+                        sg_rows.append(row)
+                else:
+                    sg_rows.append(base_sg)
+            
+            if sg_rows:
+                pd.DataFrame(sg_rows).to_excel(writer, sheet_name='Subgroup Analyses', index=False)
+        
+        # Sheet 8: Data Quality & Confidence
+        if study.confidence_scores:
+            conf_data = pd.DataFrame([{
+                'Overall_Confidence_%': round(study.confidence_scores.get('overall', 0) * 100, 1),
+                'Identification_Score_%': round(study.confidence_scores.get('by_section', {}).get('identification', 0) * 100, 1),
+                'Design_Score_%': round(study.confidence_scores.get('by_section', {}).get('design', 0) * 100, 1),
+                'Interventions_Score_%': round(study.confidence_scores.get('by_section', {}).get('interventions', 0) * 100, 1),
+                'Outcomes_Score_%': round(study.confidence_scores.get('by_section', {}).get('outcomes', 0) * 100, 1),
+                'Tables_Extracted': study.confidence_scores.get('tables_extracted', 0)
+            }])
+            conf_data.to_excel(writer, sheet_name='Data Quality', index=False)
+        
+        # Sheet 9: Extraction Details
+        if study.extraction_metadata:
+            meta = study.extraction_metadata
+            meta_data = pd.DataFrame([{
+                'Extraction_Methods': ', '.join(meta.get('extraction_methods', [])) if isinstance(meta.get('extraction_methods'), list) else meta.get('extraction_methods'),
+                'PDF_Pages': meta.get('pdf_pages'),
+                'Tables_Found': meta.get('tables_found'),
+                'LLM_Model': meta.get('llm_model'),
+                'LLM_Tokens_Used': meta.get('llm_tokens'),
+                'LLM_Finish_Reason': meta.get('llm_finish_reason'),
+                'Extraction_Date': study.extraction_date.strftime('%Y-%m-%d %H:%M:%S') if study.extraction_date else 'N/A'
+            }])
+            meta_data.to_excel(writer, sheet_name='Extraction Metadata', index=False)
     
     output.seek(0)
     
@@ -1196,7 +1445,7 @@ def export_csv(study_id):
         output,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
-        download_name=f'study_{study_id}_data.xlsx'
+        download_name=f'study_{study_id}_{study.trial_registration or "data"}.xlsx'
     )
 
 @app.route('/api/studies/search', methods=['GET'])
