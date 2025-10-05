@@ -200,6 +200,9 @@
                     }
                     
                     displayResults(extractedData);
+                    
+                    // Update extraction count
+                    updateExtractionCount();
                 } else {
                     // Mark failed status
                     ['status-pdf', 'status-tables', 'status-ocr', 'status-llm', 'status-save'].forEach(id => {
@@ -241,8 +244,22 @@
             html += '</div>';
             html += '</div></div>';
             
-            // Action buttons
-            html += '<div class="mb-4 flex gap-3">';
+            // New extraction button - separate and prominent
+            html += '<div class="mb-4 p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">';
+            html += '<div class="flex items-center justify-between">';
+            html += '<div>';
+            html += '<p class="text-sm text-gray-600">Ready to extract another study?</p>';
+            html += '</div>';
+            html += '<div class="flex gap-3">';
+            html += '<button onclick="extractNewStudy()" class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium">➕ Extract New Study</button>';
+            html += '<button onclick="goToLibrary()" class="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium">📚 View Library</button>';
+            html += '</div>';
+            html += '</div>';
+            html += '</div>';
+            
+            // Study-specific action buttons
+            html += '<div class="mb-4 flex gap-3 flex-wrap">';
+            html += '<p class="w-full text-xs text-gray-500 mb-2">Actions for this study:</p>';
             html += '<button onclick="downloadJSON()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">📥 Download JSON</button>';
             html += '<button onclick="downloadExcel()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium">📊 Download Excel</button>';
             if (data.id) {
@@ -838,6 +855,67 @@
                 window.location.href = `/api/export/csv/${extractedData.id}`;
             }
         }
+
+        function extractNewStudy() {
+            // Clear the results
+            document.getElementById('resultsContainer').classList.add('hidden');
+            document.getElementById('resultsContainer').innerHTML = '';
+            
+            // Clear the file input
+            fileInput.value = '';
+            document.getElementById('fileName').textContent = 'Click to upload PDF';
+            
+            // Clear any errors
+            document.getElementById('errorDiv').classList.add('hidden');
+            
+            // Add visual feedback - briefly highlight the upload area
+            const uploadArea = document.querySelector('.border-2.border-dashed');
+            uploadArea.classList.add('border-green-500', 'bg-green-50');
+            setTimeout(() => {
+                uploadArea.classList.remove('border-green-500', 'bg-green-50');
+                uploadArea.classList.add('border-gray-300');
+            }, 1000);
+            
+            // Scroll to top of extract section
+            document.querySelector('.bg-white.rounded-lg.shadow-lg.p-6.mb-6').scrollIntoView({ behavior: 'smooth' });
+            
+            // Update extraction count if it exists
+            updateExtractionCount();
+        }
+        
+        function goToLibrary() {
+            showTab('library');
+        }
+        
+        function updateExtractionCount() {
+            // Get today's extractions from studies
+            fetch('/api/studies')
+                .then(response => response.json())
+                .then(data => {
+                    const today = new Date().toDateString();
+                    const todaysStudies = data.studies.filter(study => {
+                        if (!study.extraction_date) return false;
+                        return new Date(study.extraction_date).toDateString() === today;
+                    });
+                    
+                    // Update or create count display
+                    let countDisplay = document.getElementById('extractionCount');
+                    if (!countDisplay) {
+                        const headerDiv = document.querySelector('.bg-white.rounded-lg.shadow-lg.p-6.mb-6');
+                        countDisplay = document.createElement('div');
+                        countDisplay.id = 'extractionCount';
+                        countDisplay.className = 'mt-2 text-sm text-gray-600';
+                        headerDiv.querySelector('p').after(countDisplay);
+                    }
+                    countDisplay.innerHTML = `📊 Studies extracted today: <span class="font-bold text-blue-600">${todaysStudies.length}</span> | Total studies: <span class="font-bold">${data.studies.length}</span>`;
+                })
+                .catch(error => console.error('Error updating count:', error));
+        }
+        
+        // Update count on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateExtractionCount();
+        });
 
         function showError(message) {
             document.getElementById('errorText').textContent = message;

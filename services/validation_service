@@ -1,0 +1,257 @@
+"""
+Data Quality Validation Service
+"""
+import re
+from typing import Dict, List, Any, Optional
+from datetime import datetime
+
+class DataQualityValidator:
+    def __init__(self):
+        self.critical_fields = [
+            ('study_identification.title', 'Study Title'),
+            ('study_identification.trial_registration', 'Trial Registration Number'),
+            ('study_design.type', 'Study Design Type'),
+            ('study_design.blinding', 'Blinding Method'),
+            ('interventions', 'Intervention Arms'),
+            ('outcomes.primary', 'Primary Outcomes'),
+            ('population.total_randomized', 'Total Randomized')
+        ]
+    
+    def validate_extraction(self, extracted_data: Dict, pdf_text: str = None) -> Dict[str, Any]:
+        """
+        Comprehensive validation of extracted data
+        """
+        validation_results = {
+            'is_valid': True,
+            'completeness_score': 0.0,
+            'consistency_checks': [],
+            'missing_critical_fields': [],
+            'warnings': [],
+            'data_quality_score': 0.0,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        # Check critical fields
+        for field_path, field_name in self.critical_fields:
+            value = self._get_nested_value(extracted_data, field_path)
+            if not value or value == 'NOT_REPORTED' or value == 'N/A':
+                validation_results['missing_critical_fields'].append({
+                    'field': field_name,
+                    'path': field_path
+                })
+                if 'primary' in field_path or 'trial_registration' in field_path:
+                    validation_results['is_valid'] = False
+        
+        # Logical consistency checks
+        consistency_errors = self._check_logical_consistency(extracted_data)
+        validation_results['consistency_checks'] = consistency_errors
+        
+        # Cross-reference with PDF text if available
+        if pdf_text:
+            cross_ref_warnings = self._cross_reference_with_text(extracted_data, pdf_text)
+            validation_results['warnings'].extend(cross_ref_warnings)
+        
+        # Calculate scores
+        validation_results['completeness_score'] = self._calculate_completeness_score(extracted_data)
+        validation_results['data_quality_score'] = self._calculate_quality_score(validation_results)
+        
+        return validation_results
+    
+    def _check_logical_consistency(self, data: Dict) -> List[Dict]:
+        """
+        Check for logical inconsistencies in the data
+        """
+        errors = []
+        
+        # Check intervention numbers
+        interventions = data.get('interventions', [])
+        for idx, intervention in enumerate(interventions):
+            n_randomized = self._safe_int(intervention.get('n_randomized'))
+            n_started = self._safe_int(intervention.get('n_started_treatment'))
+            n_completed = self._safe_int(intervention.get('n_completed'))
+            n_analyzed = self._safe_int(intervention.get('n_analyzed_primary'))
+            
+            arm_name = intervention.get('arm_name', f'Arm {idx + 1}')
+            
+            # Check logical flow: randomized >= started >= completed
+            if n_randomized and n_started and n_started > n_randomized:
+                errors.append({
+                    'type': 'ERROR',
+                    'field': f'intervention.{arm_name}',
+                    'message': f'n_started ({n_started}) exceeds n_randomized ({n_randomized})'
+                })
+            
+            if n_started and n_completed and n_completed > n_started:
+                errors.append({
+                    'type': 'ERROR',
+                    'field': f'intervention.{arm_name}',
+                    'message': f'n_completed ({n_completed}) exceeds n_started ({n_started})'
+                })
+            
+            if n_randomized and n_analyzed and n_analyzed > n_randomized:
+                errors.append({
+                    'type': 'WARNING',
+                    'field': f'intervention.{arm_name}',
+                    'message': f'n_analyzed ({n_analyzed}) exceeds n_randomized ({n_randomized})'
+                })
+        
+        # Check population numbers
+        population = data.get('population', {})
+        total_screened = self._safe_int(population.get('total_screened'))
+        total_randomized = self._safe_int(population.get('total_randomized'))
+        
+        if total_screened and total_randomized and total_randomized > total_screened:
+            errors.append({
+                'type': 'ERROR',
+                'field': 'population',
+                'message': f'total_randomized ({total_randomized}) exceeds total_screened ({total_screened})'
+            })
+        
+        # Check outcome data consistency
+        outcomes = data.get('outcomes', {})
+        for outcome_type in ['primary', 'secondary']:
+            for idx, outcome in enumerate(outcomes.get(outcome_type, [])):
+                outcome_name = outcome.get('outcome_name', f'{outcome_type}_outcome_{idx}')
+                results_by_arm = outcome.get('results_by_arm', [])
+                
+                for arm_result in results_by_arm:
+                    n = self._safe_int(arm_result.get('n'))
+                    events = self._safe_int(arm_result.get('events'))
+                    total = self._safe_int(arm_result.get('total'))
+                    
+                    if events and total and events > total:
+                        errors.append({
+                            'type': 'ERROR',
+                            'field': f'outcome.{outcome_name}',
+                            'message': f'events ({events}) exceeds total ({total})'
+                        })
+        
+        return errors
+    
+    def _cross_reference_with_text(self, data: Dict, pdf_text: str) -> List[Dict]:
+        """
+        Cross-reference extracted data with PDF text
+        """
+        warnings = []
+        
+        # Check NCT number
+        nct_pattern = r'NCT\d{8}'
+        nct_in_text = re.findall(nct_pattern, pdf_text)
+        extracted_nct = data.get('study_identification', {}).get('trial_registration')
+        
+        if nct_in_text and extracted_nct:
+            if extracted_nct not in nct_in_text:
+                warnings.append({
+                    'type': 'WARNING',
+                    'field': 'trial_registration',
+                    'message': f"Extracted NCT ({extracted_nct}) not found in text. Found: {', '.join(nct_in_text)}"
+                })
+        elif nct_in_text and not extracted_nct:
+            warnings.append({
+                'type': 'WARNING',
+                'field': 'trial_registration',
+                'message': f"NCT number found in text ({', '.join(nct_in_text)}) but not extracted"
+            })
+        
+        # Check for sample size mentions
+        sample_size_pattern = r'[nN]\s*=\s*(\d+)'
+        sample_sizes_in_text = re.findall(sample_size_pattern, pdf_text)
+        sample_sizes_in_text = [int(n) for n in sample_sizes_in_text if int(n) > 10]
+        
+        total_randomized = self._safe_int(
+            data.get('population', {}).get('total_randomized')
+        )
+        
+        if total_randomized and sample_sizes_in_text:
+            # Check if total_randomized is in the text
+            if total_randomized not in sample_sizes_in_text:
+                closest_match = min(sample_sizes_in_text, 
+                                  key=lambda x: abs(x - total_randomized))
+                if abs(closest_match - total_randomized) > 10:
+                    warnings.append({
+                        'type': 'INFO',
+                        'field': 'total_randomized',
+                        'message': f"Extracted n={total_randomized}, closest in text n={closest_match}"
+                    })
+        
+        return warnings
+    
+    def _calculate_completeness_score(self, data: Dict) -> float:
+        """
+        Calculate how complete the extraction is
+        """
+        total_fields = 0
+        populated_fields = 0
+        
+        def count_fields(obj, prefix=''):
+            nonlocal total_fields, populated_fields
+            
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    total_fields += 1
+                    if value and value not in ['NOT_REPORTED', 'N/A', '', None]:
+                        populated_fields += 1
+                    if isinstance(value, (dict, list)):
+                        count_fields(value, f"{prefix}.{key}" if prefix else key)
+            elif isinstance(obj, list) and obj:
+                for item in obj:
+                    if isinstance(item, dict):
+                        count_fields(item, prefix)
+        
+        count_fields(data)
+        
+        if total_fields == 0:
+            return 0.0
+        
+        return round((populated_fields / total_fields) * 100, 2)
+    
+    def _calculate_quality_score(self, validation_results: Dict) -> float:
+        """
+        Calculate overall data quality score
+        """
+        score = 100.0
+        
+        # Deduct for missing critical fields
+        score -= len(validation_results['missing_critical_fields']) * 10
+        
+        # Deduct for consistency errors
+        for check in validation_results['consistency_checks']:
+            if check['type'] == 'ERROR':
+                score -= 5
+            elif check['type'] == 'WARNING':
+                score -= 2
+        
+        # Factor in completeness
+        completeness_weight = 0.3
+        score = (score * 0.7) + (validation_results['completeness_score'] * completeness_weight)
+        
+        return max(0.0, min(100.0, round(score, 2)))
+    
+    def _get_nested_value(self, data: Dict, path: str) -> Any:
+        """
+        Get value from nested dictionary using dot notation
+        """
+        keys = path.split('.')
+        value = data
+        
+        for key in keys:
+            if isinstance(value, dict):
+                value = value.get(key)
+            elif isinstance(value, list) and value:
+                # For lists, check if any item has content
+                return value
+            else:
+                return None
+        
+        return value
+    
+    def _safe_int(self, value: Any) -> Optional[int]:
+        """
+        Safely convert value to integer
+        """
+        if value is None or value == '' or value == 'NOT_REPORTED':
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
