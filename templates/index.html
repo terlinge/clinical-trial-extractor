@@ -34,6 +34,24 @@
 
         <!-- Extract Tab -->
         <div id="extractTab" class="tab-content">
+            <!-- New Study Actions - MOVED TO TOP AND SEPARATED -->
+            <div id="newStudyActions" class="hidden mb-6 p-6 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg border-2 border-green-300">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-800">✅ Extraction Complete!</h3>
+                        <p class="text-sm text-gray-600 mt-1">Your study has been extracted and saved to the database.</p>
+                    </div>
+                    <div class="flex gap-3">
+                        <button onclick="extractNewStudy()" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-lg">
+                            ➕ Extract Another Study
+                        </button>
+                        <button onclick="goToLibrary()" class="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium shadow-lg">
+                            📚 View Library
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
                 <h2 class="text-xl font-semibold mb-4">Upload Clinical Trial PDF</h2>
                 
@@ -156,6 +174,8 @@
                 return;
             }
 
+            // Hide the new study actions if visible
+            document.getElementById('newStudyActions').classList.add('hidden');
             document.getElementById('loadingDiv').classList.remove('hidden');
             document.getElementById('errorDiv').classList.add('hidden');
             
@@ -201,6 +221,9 @@
                     
                     displayResults(extractedData);
                     
+                    // Show the new study actions at the top
+                    document.getElementById('newStudyActions').classList.remove('hidden');
+                    
                     // Update extraction count
                     updateExtractionCount();
                 } else {
@@ -244,22 +267,9 @@
             html += '</div>';
             html += '</div></div>';
             
-            // New extraction button - separate and prominent
-            html += '<div class="mb-4 p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">';
-            html += '<div class="flex items-center justify-between">';
-            html += '<div>';
-            html += '<p class="text-sm text-gray-600">Ready to extract another study?</p>';
-            html += '</div>';
-            html += '<div class="flex gap-3">';
-            html += '<button onclick="extractNewStudy()" class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium">➕ Extract New Study</button>';
-            html += '<button onclick="goToLibrary()" class="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium">📚 View Library</button>';
-            html += '</div>';
-            html += '</div>';
-            html += '</div>';
-            
-            // Study-specific action buttons
+            // Study-specific action buttons (download buttons for THIS study)
             html += '<div class="mb-4 flex gap-3 flex-wrap">';
-            html += '<p class="w-full text-xs text-gray-500 mb-2">Actions for this study:</p>';
+            html += '<p class="w-full text-xs text-gray-500 mb-2">Export this study:</p>';
             html += '<button onclick="downloadJSON()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">📥 Download JSON</button>';
             html += '<button onclick="downloadExcel()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium">📊 Download Excel</button>';
             if (data.id) {
@@ -267,34 +277,66 @@
             }
             html += '</div>';
             
-            // Data quality indicator
+            // TRANSPARENT Data Quality Indicator
             const confidence = (data.confidence_scores?.overall || 0);
             const confidencePercent = (confidence * 100).toFixed(0);
+            const bySection = data.confidence_scores?.by_section || {};
+            
             let confidenceBg, confidenceBorder, confidenceTextColor, confidenceText;
             
             if (confidence > 0.7) {
                 confidenceBg = 'bg-green-50';
                 confidenceBorder = 'border-green-200';
                 confidenceTextColor = 'text-green-900';
-                confidenceText = 'High Confidence';
+                confidenceText = 'High Completeness';
             } else if (confidence > 0.4) {
                 confidenceBg = 'bg-yellow-50';
                 confidenceBorder = 'border-yellow-200';
                 confidenceTextColor = 'text-yellow-900';
-                confidenceText = 'Medium Confidence';
+                confidenceText = 'Medium Completeness';
             } else {
                 confidenceBg = 'bg-red-50';
                 confidenceBorder = 'border-red-200';
                 confidenceTextColor = 'text-red-900';
-                confidenceText = 'Low Confidence - Manual Review Recommended';
+                confidenceText = 'Low Completeness - Manual Review Recommended';
             }
             
-            html += `<div class="${confidenceBg} border-2 ${confidenceBorder} rounded-lg p-3 mb-4">`;
-            html += `<div class="flex items-center gap-2">`;
-            html += `<span class="font-semibold ${confidenceTextColor}">Extraction Quality:</span>`;
-            html += `<span class="${confidenceTextColor}">${confidenceText} (${confidencePercent}%)</span>`;
-            html += `<span class="text-xs text-gray-700 ml-auto">⚠️ Always verify critical values against source PDF</span>`;
-            html += '</div></div>';
+            html += `<div class="${confidenceBg} border-2 ${confidenceBorder} rounded-lg p-4 mb-4">`;
+            html += `<div class="mb-3">`;
+            html += `<div class="flex items-center justify-between mb-2">`;
+            html += `<span class="font-semibold ${confidenceTextColor}">Data Completeness Score: ${confidenceText} (${confidencePercent}%)</span>`;
+            html += `<button onclick="toggleConfidenceDetails()" class="text-xs text-blue-600 hover:text-blue-800 underline">How is this calculated?</button>`;
+            html += `</div>`;
+            
+            // Confidence Details (Hidden by default)
+            html += `<div id="confidenceDetails" class="hidden mt-3 p-3 bg-white rounded border border-gray-200">`;
+            html += `<p class="text-xs font-semibold mb-2 text-gray-700">This score reflects how much data was successfully extracted from the PDF:</p>`;
+            html += `<div class="space-y-1 text-xs">`;
+            html += `<div class="flex justify-between">`;
+            html += `<span>Study Identification (title, authors, year, journal, registration):</span>`;
+            html += `<span class="font-bold">${((bySection.identification || 0) * 100).toFixed(0)}%</span>`;
+            html += `</div>`;
+            html += `<div class="flex justify-between">`;
+            html += `<span>Study Design (type, blinding, randomization, duration, sites):</span>`;
+            html += `<span class="font-bold">${((bySection.design || 0) * 100).toFixed(0)}%</span>`;
+            html += `</div>`;
+            html += `<div class="flex justify-between">`;
+            html += `<span>Interventions (arms, doses, sample sizes):</span>`;
+            html += `<span class="font-bold">${((bySection.interventions || 0) * 100).toFixed(0)}%</span>`;
+            html += `</div>`;
+            html += `<div class="flex justify-between">`;
+            html += `<span>Outcomes (primary/secondary with statistics):</span>`;
+            html += `<span class="font-bold">${((bySection.outcomes || 0) * 100).toFixed(0)}% <span class="text-gray-600">(weighted 50%)</span></span>`;
+            html += `</div>`;
+            html += `</div>`;
+            html += `<div class="mt-2 pt-2 border-t border-gray-200">`;
+            html += `<p class="text-xs text-gray-600">Overall score = weighted average (Outcomes count most at 50% weight)</p>`;
+            html += `<p class="text-xs text-orange-700 font-semibold mt-1">⚠️ This measures extraction completeness, NOT accuracy. Always verify critical values against the source PDF.</p>`;
+            html += `</div>`;
+            html += `</div>`;
+            
+            html += `</div>`;
+            html += '</div>';
             
             // All the detailed sections
             html += createSection('Study Identification', 'study-id', formatStudyIdentification(data), true);
@@ -315,6 +357,11 @@
             html += createSection('Extraction Metadata', 'metadata', formatMetadata(data), false);
             
             container.innerHTML = html;
+        }
+
+        function toggleConfidenceDetails() {
+            const details = document.getElementById('confidenceDetails');
+            details.classList.toggle('hidden');
         }
 
         function createSection(title, id, content, isOpen) {
@@ -588,37 +635,6 @@
             html += `<div><span class="font-medium">Completion:</span> ${meta.llm_finish_reason || 'N/A'}</div>`;
             html += '</div></div>';
             
-            // Confidence scores breakdown
-            if (conf.by_section) {
-                html += '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4">';
-                html += '<h4 class="font-semibold text-gray-900 mb-3">🎯 Confidence Scores by Section</h4>';
-                html += '<div class="space-y-2">';
-                
-                const sections = [
-                    { key: 'identification', label: 'Study Identification' },
-                    { key: 'design', label: 'Study Design' },
-                    { key: 'interventions', label: 'Interventions' },
-                    { key: 'outcomes', label: 'Outcomes' }
-                ];
-                
-                sections.forEach(section => {
-                    const score = conf.by_section[section.key] || 0;
-                    const percentage = (score * 100).toFixed(0);
-                    let bgColor = score >= 0.7 ? 'bg-green-500' : score >= 0.4 ? 'bg-yellow-500' : 'bg-red-500';
-                    
-                    html += '<div>';
-                    html += `<div class="flex justify-between mb-1 text-sm">`;
-                    html += `<span>${section.label}</span>`;
-                    html += `<span class="font-bold">${percentage}%</span>`;
-                    html += '</div>';
-                    html += `<div class="w-full bg-gray-200 rounded-full h-2">`;
-                    html += `<div class="${bgColor} h-2 rounded-full" style="width: ${percentage}%"></div>`;
-                    html += '</div></div>';
-                });
-                
-                html += '</div></div>';
-            }
-            
             // Basic info
             html += '<div class="grid grid-cols-2 gap-4 mt-4">';
             html += '<div>';
@@ -626,8 +642,8 @@
             html += `<p class="text-gray-900">${data.extraction_date ? new Date(data.extraction_date).toLocaleString() : 'N/A'}</p>`;
             html += '</div>';
             html += '<div>';
-            html += '<p class="text-sm font-semibold text-gray-600">Overall Confidence</p>';
-            html += `<p class="text-gray-900 font-bold text-lg">${conf.overall !== undefined ? (conf.overall * 100).toFixed(0) + '%' : 'N/A'}</p>`;
+            html += '<p class="text-sm font-semibold text-gray-600">PDF Stored</p>';
+            html += `<p class="text-gray-900">${data.has_pdf ? '✓ Yes (re-extraction available)' : '✗ No'}</p>`;
             html += '</div>';
             html += '</div>';
             
@@ -775,6 +791,8 @@
                 extractedData = study;
                 showTab('extract');
                 displayResults(study);
+                // Show new study actions when viewing an existing study
+                document.getElementById('newStudyActions').classList.remove('hidden');
             } catch (error) {
                 alert('Error loading study');
             }
@@ -857,6 +875,9 @@
         }
 
         function extractNewStudy() {
+            // Hide the new study actions
+            document.getElementById('newStudyActions').classList.add('hidden');
+            
             // Clear the results
             document.getElementById('resultsContainer').classList.add('hidden');
             document.getElementById('resultsContainer').innerHTML = '';
