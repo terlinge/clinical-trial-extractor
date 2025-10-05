@@ -994,6 +994,36 @@ def delete_study(study_id):
     db.session.commit()
     return jsonify({'success': True})
 
+@app.route('/api/studies/<int:study_id>/submit-review', methods=['POST'])
+def submit_for_review(study_id):
+    """Submit a study to the review queue"""
+    from sqlalchemy import text
+    
+    study = Study.query.get_or_404(study_id)
+    
+    # Check if already in queue
+    existing = db.session.execute(
+        text("SELECT id, status FROM review_queue WHERE study_id = :sid"),
+        {"sid": study_id}
+    ).fetchone()
+    
+    if existing:
+        return jsonify({
+            'error': f'Already in review queue with status: {existing[1]}'
+        }), 400
+    
+    # Add to review queue
+    db.session.execute(
+        text("INSERT INTO review_queue (study_id, status) VALUES (:sid, 'pending')"),
+        {"sid": study_id}
+    )
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': 'Study submitted for review'
+    })
+
 @app.route('/api/export/<int:study_id>', methods=['GET'])
 def export_study(study_id):
     """Export study data as JSON"""
@@ -1094,10 +1124,34 @@ def _save_to_database(data: Dict, metadata: Dict, pdf_hash: str, pdf_blob: bytes
 
 def _serialize_study(study: Study) -> Dict:
     """Convert study object to dictionary"""
+    from sqlalchemy import text
     
     # Get metadata from database - handle both during extraction and from DB
     db_metadata = study.extraction_metadata if hasattr(study, 'extraction_metadata') and study.extraction_metadata else {}
     db_confidence = study.confidence_scores if hasattr(study, 'confidence_scores') and study.confidence_scores else {}
+    
+    # Get review status if exists
+    review_status = None
+    try:
+        result = db.session.execute(
+            text("""SELECT status, submitted_date, reviewer1_email, reviewer1_completed_date, 
+                    reviewer2_email, reviewer2_completed_date 
+                    FROM review_queue WHERE study_id = :sid"""),
+            {"sid": study.id}
+        ).fetchone()
+        
+        if result:
+            review_status = {
+                'status': result[0],
+                'submitted_date': result[1].isoformat() if result[1] else None,
+                'reviewer1_email': result[2],
+                'reviewer1_completed': result[3].isoformat() if result[3] else None,
+                'reviewer2_email': result[4],
+                'reviewer2_completed': result[5].isoformat() if result[5] else None
+            }
+    except:
+        # Table might not exist yet
+        pass
     
     serialized = {
         'id': study.id,
@@ -1167,7 +1221,8 @@ def _serialize_study(study: Study) -> Dict:
         'confidence_scores': db_confidence,
         'extraction_date': study.extraction_date.isoformat() if study.extraction_date else None,
         'has_pdf': study.pdf_blob is not None if hasattr(study, 'pdf_blob') else False,
-        'pdf_filename': study.pdf_filename if hasattr(study, 'pdf_filename') else None
+        'pdf_filename': study.pdf_filename if hasattr(study, 'pdf_filename') else None,
+        'review_status': review_status
     }
     
     return serialized

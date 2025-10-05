@@ -671,41 +671,73 @@
                 return;
             }
             
-            container.innerHTML = studies.map(study => `
-                <div class="border rounded-lg p-4 hover:bg-gray-50">
-                    <div class="flex items-start justify-between">
-                        <div class="flex-1">
-                            <h3 class="font-semibold text-gray-900">${study.study_identification.title || 'Untitled'}</h3>
-                            <p class="text-sm text-gray-600">
-                                ${study.study_identification.year || 'N/A'} | 
-                                ${study.study_identification.journal || 'Unknown journal'} | 
-                                ${study.interventions.length} arms
-                            </p>
-                            <p class="text-xs text-gray-500 mt-1">
-                                Extracted: ${study.extraction_date ? new Date(study.extraction_date).toLocaleDateString() : 'N/A'}
-                            </p>
-                        </div>
-                        <div class="flex gap-2">
-                            <button onclick="viewStudy(${study.id})" 
-                                    class="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
-                                View
-                            </button>
-                            <button onclick="reExtractStudy(${study.id})" 
-                                    class="px-3 py-1 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200">
-                                Re-extract
-                            </button>
-                            <button onclick="downloadStudyExcel(${study.id})" 
-                                    class="px-3 py-1 text-sm bg-green-100 text-green-700 rounded hover:bg-green-200">
-                                Excel
-                            </button>
-                            <button onclick="deleteStudy(${study.id})" 
-                                    class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200">
-                                Delete
-                            </button>
+            container.innerHTML = studies.map(study => {
+                // Determine review status display
+                let reviewButton = '';
+                if (study.review_status) {
+                    const status = study.review_status.status;
+                    if (status === 'pending') {
+                        reviewButton = `
+                            <button class="px-3 py-1 text-sm bg-yellow-100 text-yellow-700 rounded cursor-not-allowed" disabled>
+                                ⏳ In Review Queue
+                            </button>`;
+                    } else if (status === 'in_progress') {
+                        reviewButton = `
+                            <button class="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded cursor-not-allowed" disabled>
+                                👥 Under Review
+                            </button>`;
+                    } else if (status === 'completed') {
+                        reviewButton = `
+                            <button class="px-3 py-1 text-sm bg-green-100 text-green-700 rounded cursor-not-allowed" disabled>
+                                ✅ Review Complete
+                            </button>`;
+                    }
+                } else {
+                    reviewButton = `
+                        <button onclick="submitForReview(${study.id})" 
+                                class="px-3 py-1 text-sm bg-purple-100 text-purple-700 rounded hover:bg-purple-200">
+                            📋 Submit for Review
+                        </button>`;
+                }
+                
+                return `
+                    <div class="border rounded-lg p-4 hover:bg-gray-50">
+                        <div class="flex items-start justify-between">
+                            <div class="flex-1">
+                                <h3 class="font-semibold text-gray-900">${study.study_identification.title || 'Untitled'}</h3>
+                                <p class="text-sm text-gray-600">
+                                    ${study.study_identification.year || 'N/A'} | 
+                                    ${study.study_identification.journal || 'Unknown journal'} | 
+                                    ${study.interventions.length} arms
+                                </p>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Extracted: ${study.extraction_date ? new Date(study.extraction_date).toLocaleDateString() : 'N/A'}
+                                    ${study.review_status ? ` | Review: ${study.review_status.status}` : ''}
+                                </p>
+                            </div>
+                            <div class="flex gap-2 flex-wrap">
+                                <button onclick="viewStudy(${study.id})" 
+                                        class="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
+                                    View
+                                </button>
+                                <button onclick="reExtractStudy(${study.id})" 
+                                        class="px-3 py-1 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200">
+                                    Re-extract
+                                </button>
+                                <button onclick="downloadStudyExcel(${study.id})" 
+                                        class="px-3 py-1 text-sm bg-green-100 text-green-700 rounded hover:bg-green-200">
+                                    Excel
+                                </button>
+                                ${reviewButton}
+                                <button onclick="deleteStudy(${study.id})" 
+                                        class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200">
+                                    Delete
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function loadCompareView() {
@@ -850,12 +882,65 @@
             }
         }
 
+        async function submitForReview(studyId) {
+            const study = allStudies.find(s => s.id === studyId);
+            const studyTitle = study ? (study.study_identification.title || 'this study') : 'this study';
+            
+            if (!confirm(`Submit study for review?\n\n"${studyTitle}"\n\nThis will add the study to the review queue for validation by two reviewers.\n\nContinue?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/studies/${studyId}/submit-review`, {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('Study submitted for review successfully!');
+                    loadStudiesLibrary(); // Reload to show updated status
+                } else {
+                    alert('Failed to submit for review: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Submit review error: ' + error.message);
+            }
+        }
+
         function downloadStudyExcel(studyId) {
             window.location.href = `/api/export/csv/${studyId}`;
         }
 
         function exportAllStudies() {
             window.location.href = '/api/export/all-studies';
+        }
+
+        async function submitForReview(studyId) {
+            const study = allStudies.find(s => s.id === studyId);
+            const studyTitle = study ? (study.study_identification.title || 'this study') : 'this study';
+            
+            if (!confirm(`Submit study for review?\n\n"${studyTitle}"\n\nThis will add the study to the review queue for validation by two reviewers.\n\nContinue?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/studies/${studyId}/submit-review`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('Study submitted for review successfully!');
+                    loadStudiesLibrary(); // Reload to show updated status
+                } else {
+                    alert('Failed to submit for review: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Submit review error: ' + error.message);
+            }
         }
 
         function downloadJSON() {
