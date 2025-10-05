@@ -1024,6 +1024,101 @@ def submit_for_review(study_id):
         'message': 'Study submitted for review'
     })
 
+@app.route('/api/review-queue', methods=['GET'])
+def get_review_queue():
+    """Get all studies in review queue"""
+    from sqlalchemy import text
+    
+    result = db.session.execute(
+        text("""
+            SELECT rq.*, s.title, s.journal, s.year 
+            FROM review_queue rq
+            JOIN studies s ON rq.study_id = s.id
+            WHERE rq.status IN ('pending', 'in_progress')
+            ORDER BY rq.submitted_date ASC
+        """)
+    ).fetchall()
+    
+    studies = []
+    for row in result:
+        studies.append({
+            'study_id': row[1],  # study_id is second column
+            'status': row[2],
+            'submitted_date': row[3].isoformat() if row[3] else None,
+            'reviewer1_email': row[4],
+            'reviewer1_claimed_date': row[5].isoformat() if row[5] else None,
+            'reviewer1_completed_date': row[6].isoformat() if row[6] else None,
+            'reviewer2_email': row[7],
+            'reviewer2_claimed_date': row[8].isoformat() if row[8] else None,
+            'reviewer2_completed_date': row[9].isoformat() if row[9] else None,
+            'title': row[10],
+            'journal': row[11],
+            'year': row[12]
+        })
+    
+    return jsonify({'studies': studies})
+
+@app.route('/api/studies/<int:study_id>/claim-review', methods=['POST'])
+def claim_review(study_id):
+    """Claim a study for review as Reviewer 1 or 2"""
+    from sqlalchemy import text
+    
+    data = request.json
+    reviewer_number = data.get('reviewer_number')
+    email = data.get('email')
+    
+    if not email or not reviewer_number:
+        return jsonify({'error': 'Email and reviewer_number required'}), 400
+    
+    if reviewer_number not in [1, 2]:
+        return jsonify({'error': 'reviewer_number must be 1 or 2'}), 400
+    
+    # Check if study is in review queue
+    review = db.session.execute(
+        text("SELECT reviewer1_email, reviewer2_email FROM review_queue WHERE study_id = :sid"),
+        {"sid": study_id}
+    ).fetchone()
+    
+    if not review:
+        return jsonify({'error': 'Study not in review queue'}), 404
+    
+    # Check if already claimed by same person
+    if review[0] == email or review[1] == email:
+        return jsonify({'error': 'You have already claimed this study'}), 400
+    
+    # Check if position already taken
+    if reviewer_number == 1 and review[0]:
+        return jsonify({'error': 'Reviewer 1 position already taken'}), 400
+    if reviewer_number == 2 and review[1]:
+        return jsonify({'error': 'Reviewer 2 position already taken'}), 400
+    
+    # Claim the review
+    if reviewer_number == 1:
+        db.session.execute(
+            text("""UPDATE review_queue 
+                    SET reviewer1_email = :email, 
+                        reviewer1_claimed_date = CURRENT_TIMESTAMP,
+                        status = 'in_progress'
+                    WHERE study_id = :sid"""),
+            {"email": email, "sid": study_id}
+        )
+    else:
+        db.session.execute(
+            text("""UPDATE review_queue 
+                    SET reviewer2_email = :email, 
+                        reviewer2_claimed_date = CURRENT_TIMESTAMP,
+                        status = 'in_progress'
+                    WHERE study_id = :sid"""),
+            {"email": email, "sid": study_id}
+        )
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Successfully claimed as Reviewer {reviewer_number}'
+    })
+
 @app.route('/api/export/<int:study_id>', methods=['GET'])
 def export_study(study_id):
     """Export study data as JSON"""

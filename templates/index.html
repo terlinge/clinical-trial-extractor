@@ -20,13 +20,16 @@
             
             <!-- Tabs -->
             <div class="flex gap-6 mt-4 border-b">
-                <button onclick="showTab('extract')" id="tab-extract" class="pb-2 font-medium tab-active">
+                <button onclick="showTab('extract')" id="tab-extract" class="pb-2 font-medium tab-active cursor-pointer">
                     Extract New
                 </button>
-                <button onclick="showTab('library')" id="tab-library" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                <button onclick="showTab('library')" id="tab-library" class="pb-2 font-medium text-gray-600 hover:text-blue-600 cursor-pointer">
                     Studies Library
                 </button>
-                <button onclick="showTab('compare')" id="tab-compare" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                <button onclick="showTab('review')" id="tab-review" class="pb-2 font-medium text-gray-600 hover:text-blue-600 cursor-pointer">
+                    Review Queue
+                </button>
+                <button onclick="showTab('compare')" id="tab-compare" class="pb-2 font-medium text-gray-600 hover:text-blue-600 cursor-pointer">
                     Compare Studies
                 </button>
             </div>
@@ -116,6 +119,27 @@
             </div>
         </div>
 
+        <!-- Review Queue Tab -->
+        <div id="reviewTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <h2 class="text-xl font-semibold mb-4">Review Queue</h2>
+                
+                <!-- Reviewer Identity -->
+                <div class="mb-6 p-4 bg-blue-50 rounded-lg">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Your Email (for tracking reviews):</label>
+                    <input type="email" id="reviewerEmail" placeholder="reviewer@example.com" 
+                           class="w-full md:w-1/2 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           onchange="saveReviewerEmail()">
+                    <p class="text-xs text-gray-500 mt-1">This email will be used to track your reviews and prevent double-reviewing</p>
+                </div>
+                
+                <!-- Studies Pending Review -->
+                <div id="reviewQueueList" class="space-y-3">
+                    <p class="text-gray-500">Loading review queue...</p>
+                </div>
+            </div>
+        </div>
+
         <!-- Compare Tab -->
         <div id="compareTab" class="tab-content hidden">
             <div class="bg-white rounded-lg shadow-lg p-6">
@@ -163,6 +187,9 @@
             // Load data for that tab
             if (tabName === 'library') {
                 loadStudiesLibrary();
+            } else if (tabName === 'review') {
+                loadReviewQueue();
+                loadReviewerEmail();
             } else if (tabName === 'compare') {
                 loadCompareView();
             }
@@ -941,6 +968,140 @@
             } catch (error) {
                 alert('Submit review error: ' + error.message);
             }
+        }
+
+        // Review Queue Functions
+        function saveReviewerEmail() {
+            const email = document.getElementById('reviewerEmail').value;
+            if (email) {
+                localStorage.setItem('reviewerEmail', email);
+            }
+        }
+
+        function loadReviewerEmail() {
+            const email = localStorage.getItem('reviewerEmail');
+            if (email) {
+                document.getElementById('reviewerEmail').value = email;
+            }
+        }
+
+        async function loadReviewQueue() {
+            try {
+                const response = await fetch('/api/review-queue');
+                const data = await response.json();
+                displayReviewQueue(data.studies);
+            } catch (error) {
+                document.getElementById('reviewQueueList').innerHTML = 
+                    '<p class="text-red-600">Error loading review queue</p>';
+            }
+        }
+
+        function displayReviewQueue(studies) {
+            const container = document.getElementById('reviewQueueList');
+            
+            if (!studies || studies.length === 0) {
+                container.innerHTML = '<p class="text-gray-500">No studies pending review</p>';
+                return;
+            }
+            
+            container.innerHTML = studies.map(study => {
+                const hasReviewer1 = study.reviewer1_email;
+                const hasReviewer2 = study.reviewer2_email;
+                const currentEmail = document.getElementById('reviewerEmail')?.value;
+                
+                let claimButtons = '';
+                if (!hasReviewer1) {
+                    claimButtons += `
+                        <button onclick="claimAsReviewer(${study.study_id}, 1)" 
+                                class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                            Claim as Reviewer 1
+                        </button>`;
+                } else {
+                    claimButtons += `
+                        <span class="px-3 py-1 text-sm bg-gray-200 rounded">
+                            R1: ${hasReviewer1 === currentEmail ? 'You' : hasReviewer1.split('@')[0]}
+                        </span>`;
+                }
+                
+                if (!hasReviewer2) {
+                    claimButtons += `
+                        <button onclick="claimAsReviewer(${study.study_id}, 2)" 
+                                class="ml-2 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">
+                            Claim as Reviewer 2
+                        </button>`;
+                } else {
+                    claimButtons += `
+                        <span class="ml-2 px-3 py-1 text-sm bg-gray-200 rounded">
+                            R2: ${hasReviewer2 === currentEmail ? 'You' : hasReviewer2.split('@')[0]}
+                        </span>`;
+                }
+                
+                // Start Review button if user has claimed
+                let reviewButton = '';
+                if (hasReviewer1 === currentEmail || hasReviewer2 === currentEmail) {
+                    const reviewerNum = hasReviewer1 === currentEmail ? 1 : 2;
+                    reviewButton = `
+                        <button onclick="startReview(${study.study_id}, ${reviewerNum})" 
+                                class="ml-2 px-3 py-1 text-sm bg-purple-600 text-white rounded hover:bg-purple-700">
+                            Start Review
+                        </button>`;
+                }
+                
+                return `
+                    <div class="border rounded-lg p-4 bg-gray-50">
+                        <div class="flex items-start justify-between">
+                            <div class="flex-1">
+                                <h3 class="font-semibold text-gray-900">${study.title || 'Untitled'}</h3>
+                                <p class="text-sm text-gray-600">
+                                    ${study.year || 'N/A'} | 
+                                    ${study.journal || 'Unknown journal'} | 
+                                    Submitted: ${study.submitted_date ? new Date(study.submitted_date).toLocaleDateString() : 'N/A'}
+                                </p>
+                            </div>
+                            <div class="flex items-center">
+                                ${claimButtons}
+                                ${reviewButton}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function claimAsReviewer(studyId, reviewerNumber) {
+            const email = document.getElementById('reviewerEmail').value;
+            if (!email) {
+                alert('Please enter your email first');
+                document.getElementById('reviewerEmail').focus();
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/studies/${studyId}/claim-review`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        reviewer_number: reviewerNumber,
+                        email: email
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`Successfully claimed as Reviewer ${reviewerNumber}`);
+                    loadReviewQueue();
+                } else {
+                    alert('Failed to claim: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Claim error: ' + error.message);
+            }
+        }
+
+        function startReview(studyId, reviewerNumber) {
+            alert(`Review interface coming next! Study ${studyId}, Reviewer ${reviewerNumber}`);
+            // This is where we'll open the actual review interface
         }
 
         function downloadJSON() {
