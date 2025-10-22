@@ -431,11 +431,22 @@ class LLMExtractor:
         print(f"Prompt length: {len(prompt)} characters")
         print(f"Tables included: {len(tables) if tables else 0}")
         
-        # Smart prompt management - prioritize key content
-        if len(prompt) > 100000:  # 100k character limit
-            print(f"⚠️ WARNING: Prompt is very long ({len(prompt)} chars). Creating focused version...")
+        # Smart tiered prompt management based on OpenAI token limits
+        estimated_tokens = len(prompt) // 4  # Rough estimate: 4 chars per token
+        
+        if estimated_tokens > 25000:  # Approaching 30k token limit
+            print(f"⚠️ TOKEN LIMIT: Estimated {estimated_tokens} tokens exceeds limit. Creating optimized version...")
             prompt = self._create_focused_extraction_prompt(text, table_context, tables)
-            print(f"📝 Focused prompt length: {len(prompt)} characters")
+            print(f"📝 Optimized prompt length: {len(prompt)} characters (~{len(prompt)//4} tokens)")
+        elif estimated_tokens > 20000:  # Yellow zone - mild optimization
+            print(f"📊 LARGE PROMPT: {estimated_tokens} estimated tokens. Using selective optimization...")
+            # Preserve key content but reduce redundancy
+            if len(page_context) > 15000:
+                page_context = page_context[:15000] + "\n[PAGE CONTEXT TRUNCATED]"
+            prompt = self._create_extraction_prompt(text[:70000], table_context, page_context)
+            print(f"📝 Selective optimization: {len(prompt)} characters (~{len(prompt)//4} tokens)")
+        else:
+            print(f"📊 Using full extraction prompt ({len(prompt)} chars, ~{estimated_tokens} tokens) - within limits")
         
         try:
             print("Making OpenAI API request...")
@@ -483,6 +494,18 @@ class LLMExtractor:
             print(f"Has interventions: {len(extracted_data.get('interventions', []))} arms")
             print(f"Has primary outcomes: {len(extracted_data.get('outcomes', {}).get('primary', []))}")
             print(f"Has secondary outcomes: {len(extracted_data.get('outcomes', {}).get('secondary', []))}")
+            
+            # Debug: Show sample of extracted data
+            if extracted_data.get('outcomes', {}).get('primary'):
+                primary = extracted_data['outcomes']['primary'][0]
+                print(f"Primary outcome name: {primary.get('outcome_name', 'Not found')}")
+                if primary.get('timepoints'):
+                    print(f"Primary timepoints found: {len(primary['timepoints'])}")
+                    print(f"First timepoint: {primary['timepoints'][0].get('timepoint_name', 'No name')}")
+                elif primary.get('results_by_arm'):
+                    print(f"Primary results by arm: {len(primary['results_by_arm'])} arms")
+                else:
+                    print("No results data found in primary outcome")
             print(f"========================\n")
             
             return extracted_data
@@ -491,9 +514,30 @@ class LLMExtractor:
             print(f"❌ LLM JSON parsing error: {e}")
             print(f"First 500 chars of response: {raw_content[:500] if 'raw_content' in locals() else 'N/A'}")
             return {}
-        except openai.APITimeoutError as e:
-            print(f"❌ LLM timeout error: Request took too long (>2 minutes): {e}")
-            return {}
+        except openai.RateLimitError as e:
+            print(f"❌ LLM rate limit error: {e}")
+            print(f"🔄 Attempting retry with smaller prompt...")
+            # Fallback: Use much more aggressive focusing
+            focused_prompt = self._create_focused_extraction_prompt(text[:30000], table_context[:5000], [])
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert clinical trial data extractor. Extract key data with source citations."},
+                        {"role": "user", "content": focused_prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=3000,
+                    response_format={"type": "json_object"},
+                    timeout=60
+                )
+                raw_content = response.choices[0].message.content
+                extracted_data = json.loads(raw_content)
+                print(f"✅ Retry successful with focused extraction")
+                return extracted_data
+            except Exception as retry_error:
+                print(f"❌ Retry also failed: {retry_error}")
+                return {}
         except openai.APIError as e:
             print(f"❌ LLM API error: {e}")
             return {}
@@ -514,11 +558,18 @@ class LLMExtractor:
 6. For statistical values, specify the exact location where you found each number
 
 📊 DATA COMPLETENESS REQUIREMENTS:
-1. Extract EVERY number, statistic, and parameter - never leave fields as "NOT_SPECIFIED"
-2. Search for missing data in multiple locations: text, tables, figures, appendix
-3. For clinical trials, ALWAYS extract: means, SDs, CIs, p-values, sample sizes, effect estimates
-4. Look for baseline characteristics tables - these contain crucial demographic data
-5. Search for CONSORT diagrams for exact participant flow numbers
+1. Extract EVERY number, statistic, and parameter - NEVER write "NOT_SPECIFIED"
+2. Search MULTIPLE locations for each piece of data: abstract, methods, results, tables, figures
+3. For missing standard deviations, look for: SE (standard error), CI (confidence intervals), p-values
+4. For missing sample sizes, check: CONSORT diagram, baseline table, results tables
+5. For missing demographics, search: Table 1, baseline characteristics, participant flow
+6. If truly not found after thorough search, write "NOT_FOUND_AFTER_COMPREHENSIVE_SEARCH"
+
+🔍 MANDATORY SEARCH REQUIREMENTS:
+- CONSORT diagram: Search for "Figure 1", "participant flow", "enrollment", "randomization"
+- Baseline table: Search for "Table 1", "baseline characteristics", "demographics"  
+- Results tables: Search for "Table 2", "Table 3", "primary outcomes", "secondary outcomes"
+- Statistical parameters: Search for every instance of numbers, means, SDs, CIs, p-values
 
 🎯 STATISTICAL DATA PRIORITY:
 - Primary outcomes: Extract ALL means, SDs, CIs, p-values with exact sources
@@ -606,13 +657,18 @@ Return JSON with this EXACT structure - EVERY field must include source citation
     ]
   }},
   "population": {{
-    "total_screened": "number screened - Source: page X or Table Y",
-    "total_randomized": "number randomized - Source: page X or Table Y", 
-    "total_analyzed_itt": "ITT population - Source: page X or Table Y",
-    "age_mean": "mean age with exact value - Source: Table X page Y",
-    "age_sd": "standard deviation - Source: Table X page Y",
-    "sex_male_percent": "percent male with exact value - Source: Table X page Y",
-    "baseline_characteristics_source": "specify exact table/page where demographics found"
+    "total_screened": "FIND THIS: Search CONSORT diagram, Figure 1, enrollment numbers - Source: exact location",
+    "total_randomized": "CALCULATE FROM ARMS: Add up all randomized numbers from interventions - Source: calculation or exact table", 
+    "total_analyzed_itt": "FIND THIS: Search for 'intention-to-treat', 'ITT', 'analyzed population' - Source: exact location",
+    "age_mean": "FIND THIS: Search Table 1, baseline characteristics, demographics section - Source: Table X page Y",
+    "age_sd": "FIND THIS: Must be in baseline table - look for (SD), ±, standard deviation - Source: Table X page Y",
+    "sex_male_percent": "FIND THIS: Search baseline table for 'male', 'sex', 'gender' percentages - Source: Table X page Y",
+    "baseline_characteristics_source": "MANDATORY: Identify exact table/page where ALL demographics found",
+    "age_range": "min-max ages if reported",
+    "sex_male_n": "absolute number of males",
+    "race_ethnicity": "race/ethnicity breakdown with percentages",
+    "inclusion_criteria": ["FIND ALL inclusion criteria from methods section"],
+    "exclusion_criteria": ["FIND ALL exclusion criteria from methods section"]
   }},
     "age_range": "min-max",
     "sex_male_n": "number male",
@@ -858,22 +914,36 @@ Extract now. MANDATORY: Every single data point must include its source location
         if current_section and in_results:
             results_sections.append('\n'.join(current_section))
         
-        # Priority 2: Find tables with statistical data (universal patterns)
+        # Priority 2: Find baseline characteristics and demographics (CRITICAL for population data)
+        baseline_sections = []
+        baseline_keywords = ['baseline', 'demographics', 'characteristics', 'table 1', 'participant', 
+                           'enrollment', 'screened', 'randomized', 'age', 'male', 'female', 'consort']
+        
+        for line in lines[:200]:  # Search early in document for baseline info
+            if any(keyword in line.lower() for keyword in baseline_keywords):
+                baseline_sections.append(line)
+        
+        baseline_text = '\n'.join(baseline_sections[:100])  # Preserve baseline data
+        
+        # Priority 3: Find statistical results with complete parameters
+        # Priority 3: Find statistical results with complete parameters
         key_table_text = ""
         if table_context:
             table_lines = table_context.split('\n')
             statistical_table_lines = []
             
-            # Generic statistical keywords that appear in any clinical trial table
-            stat_keywords = ['mean', 'sd', 'median', 'ci', 'confidence', 'interval', 'p-value', 'p value',
+            # Enhanced statistical keywords - prioritize complete data
+            stat_keywords = ['mean', 'sd', 'standard deviation', 'median', 'ci', 'confidence', 'interval', 'p-value', 'p value',
                            'n=', 'total', 'group', 'arm', 'treatment', 'control', 'placebo', 'baseline',
-                           'change', 'difference', 'estimate', 'effect', 'outcome', 'endpoint', '%', 'percent']
+                           'change', 'difference', 'estimate', 'effect', 'outcome', 'endpoint', '%', 'percent',
+                           'screened', 'randomized', 'analyzed', 'enrolled', 'consort', 'age', 'male', 'female',
+                           'demographics', 'characteristics', '±', 'mm hg', 'systolic', 'diastolic']
             
             for line in table_lines:
                 if any(keyword in line.lower() for keyword in stat_keywords):
                     statistical_table_lines.append(line)
             
-            key_table_text = '\n'.join(statistical_table_lines[:300])  # Increased limit for more data
+            key_table_text = '\n'.join(statistical_table_lines[:400])  # Increased for more complete data
         
         # Priority 3: Extract methods and study design (universal for all trials)
         methods_text = ""
@@ -886,16 +956,22 @@ Extract now. MANDATORY: Every single data point must include its source location
                 if len(methods_text) > 4000:  # Increased limit
                     break
         
-        # Create focused content prioritizing statistical data
+        # Create focused content prioritizing BASELINE DATA and complete statistics
         focused_text = f"""
 === STUDY DESIGN & METHODS ===
-{methods_text[:4000]}
+{methods_text[:6000]}
+
+=== BASELINE CHARACTERISTICS & DEMOGRAPHICS ===
+{baseline_text[:8000]}
 
 === RESULTS SECTIONS ===
-{(' '.join(results_sections))[:20000]}
+{(' '.join(results_sections))[:25000]}
 
-=== STATISTICAL DATA TABLES ===
-{key_table_text[:15000]}
+=== COMPLETE STATISTICAL DATA TABLES ===
+{key_table_text[:20000]}
+
+=== ADDITIONAL METHODS & RESULTS ===
+{text[20000:45000] if len(text) > 45000 else text[20000:]}
 """
         
         return f"""You are an expert clinical trial data extractor. Extract ALL statistical data with MANDATORY source citations.
@@ -1011,7 +1087,14 @@ Return JSON with this complete structure:
 CLINICAL TRIAL CONTENT TO EXTRACT FROM:
 {focused_text}
 
-EXTRACT ALL STATISTICAL VALUES from any tables or text. Search thoroughly for ALL outcomes and provide exact numbers with source citations."""
+EXTRACT ALL STATISTICAL VALUES from any tables or text. Search thoroughly for ALL outcomes and provide exact numbers with source citations.
+
+🔍 CRITICAL MISSING DATA TO FIND:
+- TOTAL SCREENED: Look for "screened", "assessed for eligibility", "enrollment"
+- TOTAL RANDOMIZED: ADD UP individual arm numbers OR find explicit total
+- AGE DEMOGRAPHICS: Search "Table 1", "baseline characteristics", "age (years)", "mean age"
+- STANDARD DEVIATIONS: Look for (SD), ±, standard deviation, confidence intervals to calculate SD
+- COMPLETE STATISTICAL RESULTS: Every mean must have SD, every estimate must have complete CI"""
 
 # ==================== HEURISTIC EXTRACTION ====================
 
@@ -1029,6 +1112,12 @@ class HeuristicExtractor:
             'hazard_ratios': r'HR[:\s]*([0-9.]+)',
             'mean_sd': r'([0-9.]+)\s*\(SD\s*[=:]?\s*([0-9.]+)\)',
             'nct_numbers': r'NCT\d{8}',
+            # Enhanced demographic patterns
+            'age_mean_sd': r'age[:\s]*([0-9.]+)\s*\(([0-9.]+)\)',
+            'age_range': r'age[:\s]*([0-9]+)\s*[-–to]\s*([0-9]+)',
+            'sample_sizes': r'[nN]\s*=\s*(\d+)',
+            'percentages': r'(\d+\.?\d*)\s*%',
+            'treatment_duration': r'(\d+)\s*(weeks?|months?|days?)',
         }
         
         results = {}
@@ -1055,6 +1144,65 @@ class HeuristicExtractor:
             sizes.extend([int(m) for m in matches])
         
         return sizes
+    
+    @staticmethod
+    def extract_demographics(text: str) -> Dict:
+        """Extract demographic information using patterns"""
+        demographics = {}
+        
+        # Age patterns
+        age_patterns = [
+            r'mean\s+age[:\s]*([0-9.]+)',
+            r'age[:\s]*([0-9.]+)\s*years',
+            r'aged\s+([0-9.]+)',
+            r'age[:\s]*([0-9.]+)\s*\(([0-9.]+)\)',  # mean (sd)
+        ]
+        
+        for pattern in age_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                if isinstance(matches[0], tuple) and len(matches[0]) == 2:
+                    demographics['age_mean'] = float(matches[0][0])
+                    demographics['age_sd'] = float(matches[0][1])
+                else:
+                    demographics['age_mean'] = float(matches[0])
+                break
+        
+        # Gender patterns
+        gender_text = text.lower()
+        male_patterns = [
+            r'(\d+)\s*\(\s*([0-9.]+)%\s*\)\s*male',
+            r'male[:\s]*(\d+)',
+            r'men[:\s]*(\d+)',
+        ]
+        
+        female_patterns = [
+            r'(\d+)\s*\(\s*([0-9.]+)%\s*\)\s*female',
+            r'female[:\s]*(\d+)',
+            r'women[:\s]*(\d+)',
+        ]
+        
+        for pattern in male_patterns:
+            matches = re.findall(pattern, gender_text)
+            if matches:
+                if isinstance(matches[0], tuple):
+                    demographics['male_count'] = int(matches[0][0])
+                    demographics['male_percentage'] = float(matches[0][1])
+                else:
+                    demographics['male_count'] = int(matches[0])
+                break
+        
+        for pattern in female_patterns:
+            matches = re.findall(pattern, gender_text)
+            if matches:
+                if isinstance(matches[0], tuple):
+                    demographics['female_count'] = int(matches[0][0])
+                    demographics['female_percentage'] = float(matches[0][1])
+                else:
+                    demographics['female_count'] = int(matches[0])
+                break
+        
+        return demographics
 
 # ==================== ENSEMBLE & VALIDATION ====================
 
@@ -1080,23 +1228,45 @@ class EnsembleExtractor:
             self.pdf_extractor.pages_text if hasattr(self.pdf_extractor, 'pages_text') else None
         )
         
-        # Step 3: Heuristic extraction
-        heuristic_data = self.heuristic_extractor.extract_statistical_values(pdf_data['text'])
+        # Step 3: Heuristic extraction - ENHANCED
+        heuristic_stats = self.heuristic_extractor.extract_statistical_values(pdf_data['text'])
+        heuristic_demographics = self.heuristic_extractor.extract_demographics(pdf_data['text'])
+        heuristic_data = {**heuristic_stats, 'demographics': heuristic_demographics}
         
-        # Step 4: Ensemble and validation
+        # Step 4: Ensemble and validation - NOW ACTUALLY USES ALL DATA
         final_data = self._ensemble_results(llm_data, heuristic_data, pdf_data)
         
         # Step 5: Calculate confidence scores
         confidence_scores = self._calculate_confidence(final_data, pdf_data, heuristic_data)
         
         metadata = {
-            'extraction_methods': pdf_data['methods_used'] + ['llm', 'heuristic'],
+            'extraction_methods': pdf_data['methods_used'] + ['llm', 'heuristic', 'demographics'],
             'tables_found': len(pdf_data.get('tables', [])),
             'pdf_pages': pdf_data.get('page_count', 0),
             'confidence_scores': confidence_scores,
             'llm_model': self.llm_extractor.model,
             'llm_tokens': self.llm_extractor.tokens_used,
-            'llm_finish_reason': self.llm_extractor.finish_reason
+            'llm_finish_reason': self.llm_extractor.finish_reason,
+            'heuristic_findings': len(heuristic_stats),
+            'demographics_extracted': bool(heuristic_demographics),
+            # Enhanced process details
+            'pdf_text_length': len(pdf_data.get('text', '')),
+            'ocr_text_length': len(pdf_data.get('ocr_text', '')),
+            'tables_extracted': len(pdf_data.get('tables', [])),
+            'heuristic_patterns_found': {
+                'p_values': len(heuristic_stats.get('p_values', [])),
+                'confidence_intervals': len(heuristic_stats.get('confidence_intervals', [])),
+                'sample_sizes': len(heuristic_stats.get('sample_sizes', [])),
+                'demographics': len(heuristic_demographics) if heuristic_demographics else 0
+            },
+            'extraction_success': {
+                'pdf_extraction': len(pdf_data.get('text', '')) > 0,
+                'ocr_extraction': len(pdf_data.get('ocr_text', '')) > 0,
+                'table_extraction': len(pdf_data.get('tables', [])) > 0,
+                'llm_extraction': self.llm_extractor.tokens_used > 0,
+                'heuristic_extraction': len(heuristic_stats) > 0,
+                'demographics_extraction': bool(heuristic_demographics)
+            }
         }
         
         return final_data, metadata
@@ -1105,10 +1275,125 @@ class EnsembleExtractor:
         """Combine and validate results from different methods"""
         ensembled = llm_data.copy()
         
+        # Add extracted tables from PDF
         if pdf_data.get('tables'):
             ensembled['extracted_tables'] = pdf_data['tables']
         
+        # CRITICAL FIX: Actually use heuristic extraction data!
+        if heuristic_data:
+            # Add statistical values found by pattern matching
+            ensembled['heuristic_findings'] = heuristic_data
+            
+            # Enhance outcomes with heuristic statistical data
+            if 'outcomes' in ensembled:
+                self._enhance_outcomes_with_heuristics(ensembled['outcomes'], heuristic_data)
+            
+            # Add sample sizes if found
+            if heuristic_data.get('mean_sd'):
+                ensembled['population_statistics'] = {
+                    'mean_sd_values': heuristic_data['mean_sd'],
+                    'source': 'heuristic_extraction'
+                }
+            
+            # Add demographics from heuristic extraction
+            if heuristic_data.get('demographics'):
+                if 'participants' not in ensembled:
+                    ensembled['participants'] = {}
+                ensembled['participants'].update(heuristic_data['demographics'])
+                ensembled['participants']['heuristic_source'] = True
+        
+        # Extract demographics from tables if available
+        if pdf_data.get('tables'):
+            demographics = self._extract_demographics_from_tables(pdf_data['tables'])
+            if demographics:
+                if 'participants' not in ensembled:
+                    ensembled['participants'] = {}
+                ensembled['participants'].update(demographics)
+        
         return ensembled
+    
+    def _enhance_outcomes_with_heuristics(self, outcomes: Dict, heuristic_data: Dict):
+        """Add statistical values from heuristic extraction to outcomes"""
+        if not outcomes:
+            return
+            
+        # Add p-values, CIs, effect estimates from pattern matching
+        statistical_enhancements = {}
+        
+        if heuristic_data.get('p_values'):
+            statistical_enhancements['p_values_found'] = heuristic_data['p_values']
+        
+        if heuristic_data.get('confidence_intervals'):
+            statistical_enhancements['confidence_intervals'] = [
+                f"{ci[0]}-{ci[1]}" for ci in heuristic_data['confidence_intervals']
+            ]
+        
+        if heuristic_data.get('odds_ratios'):
+            statistical_enhancements['odds_ratios'] = heuristic_data['odds_ratios']
+            
+        if heuristic_data.get('relative_risks'):
+            statistical_enhancements['relative_risks'] = heuristic_data['relative_risks']
+            
+        if heuristic_data.get('hazard_ratios'):
+            statistical_enhancements['hazard_ratios'] = heuristic_data['hazard_ratios']
+        
+        # Add to primary outcomes
+        for outcome in outcomes.get('primary', []):
+            if not outcome.get('statistical_analysis'):
+                outcome['statistical_analysis'] = {}
+            outcome['statistical_analysis'].update(statistical_enhancements)
+    
+    def _extract_demographics_from_tables(self, tables: List[Dict]) -> Dict:
+        """Extract demographic data directly from tables"""
+        demographics = {}
+        
+        for table in tables:
+            if not table.get('data'):
+                continue
+                
+            # Look for demographic/baseline tables
+            table_text = str(table.get('data', '')).lower()
+            
+            # Common demographic indicators
+            if any(term in table_text for term in ['age', 'gender', 'sex', 'demographics', 'baseline', 'characteristics']):
+                # Extract age information
+                age_patterns = [
+                    r'age.*?(\d+\.?\d*)\s*\(\s*(\d+\.?\d*)\s*\)',  # Age: 65.5 (12.3)
+                    r'(\d+\.?\d*)\s*±\s*(\d+\.?\d*)',  # 65.5 ± 12.3
+                    r'mean.*?(\d+\.?\d*)',  # Mean age 65.5
+                ]
+                
+                for pattern in age_patterns:
+                    matches = re.findall(pattern, table_text, re.IGNORECASE)
+                    if matches:
+                        if len(matches[0]) == 2:  # Mean and SD
+                            demographics['age_mean'] = float(matches[0][0])
+                            demographics['age_sd'] = float(matches[0][1])
+                        else:  # Just mean
+                            demographics['age_mean'] = float(matches[0])
+                        break
+                
+                # Extract gender distribution
+                gender_patterns = [
+                    r'male.*?(\d+)',
+                    r'female.*?(\d+)',
+                    r'men.*?(\d+)',
+                    r'women.*?(\d+)'
+                ]
+                
+                for pattern in gender_patterns:
+                    matches = re.findall(pattern, table_text, re.IGNORECASE)
+                    if matches:
+                        if 'male' in pattern or 'men' in pattern:
+                            demographics['male_count'] = int(matches[0])
+                        else:
+                            demographics['female_count'] = int(matches[0])
+                
+                # Add table source
+                demographics['source'] = 'table_extraction'
+                break
+        
+        return demographics
     
     def _calculate_confidence(self, final_data: Dict, pdf_data: Dict, heuristic_data: Dict) -> Dict:
         """Calculate meaningful confidence scores based on data completeness"""
@@ -1379,8 +1664,8 @@ def re_extract_study(study_id):
                         study_id=study.id,
                         timepoint_name=timepoint_name,
                         timepoint_value=timepoint_value,
-                        timepoint_unit=timepoint_unit,
-                        timepoint_type=tp_data.get('timepoint_type', outcome_type),
+                        timepoint_unit=_safe_truncate(timepoint_unit),
+                        timepoint_type=_safe_truncate(tp_data.get('timepoint_type', outcome_type)),
                         
                         # Sample size
                         n_analyzed=_extract_numeric_value(first_arm.get('n')),
@@ -1404,7 +1689,7 @@ def re_extract_study(study_id):
                         effect_ci_lower=_extract_numeric_value(comparison.get('ci_95_lower')),
                         effect_ci_upper=_extract_numeric_value(comparison.get('ci_95_upper')),
                         p_value=_extract_p_value(comparison.get('p_value')),
-                        p_value_text=comparison.get('p_value', '').split(' - Source:')[0].strip(),
+                        p_value_text=_safe_truncate(comparison.get('p_value', '')),
                         
                         # Source tracking
                         data_source=tp_data.get('data_source', ''),
@@ -1591,6 +1876,23 @@ def _extract_p_value(p_value_string):
     
     return None
 
+def _safe_truncate(value, max_length=50):
+    """Safely truncate string values for database fields with length limits"""
+    if not value:
+        return value
+    if not isinstance(value, str):
+        value = str(value)
+    
+    # Remove source information if it makes the string too long
+    if " - Source:" in value and len(value) > max_length:
+        value = value.split(" - Source:")[0].strip()
+    
+    # Truncate if still too long
+    if len(value) > max_length:
+        value = value[:max_length-3] + "..."
+    
+    return value
+
 def _parse_timepoint(timepoint_name):
     """Parse timepoint string to extract numeric value and unit"""
     if not timepoint_name or not isinstance(timepoint_name, str):
@@ -1702,20 +2004,91 @@ def _save_to_database(data: Dict, metadata: Dict, pdf_hash: str, pdf_blob: bytes
         )
         db.session.add(intervention)
     
-    # Add outcomes
-    for outcome_type in ['primary', 'secondary']:
-        for outcome_data in data.get('outcomes', {}).get(outcome_type, []):
-            outcome = Outcome(
-                study_id=study.id,
-                outcome_name=outcome_data.get('outcome_name'),
-                outcome_type=outcome_type,
-                timepoint=outcome_data.get('timepoint'),
-                results_by_arm=outcome_data.get('results_by_arm'),
-                effect_estimate=outcome_data.get('between_group_comparison')
-            )
-            db.session.add(outcome)
-    
-    # Add subgroups
+        # Add outcomes with multiple timepoints support
+        for outcome_type in ['primary', 'secondary']:
+            for outcome_data in data.get('outcomes', {}).get(outcome_type, []):
+                # Create main outcome record
+                outcome = Outcome(
+                    study_id=study.id,
+                    outcome_name=outcome_data.get('outcome_name'),
+                    outcome_type=outcome_type,
+                    outcome_category=outcome_data.get('outcome_type'),  # continuous/dichotomous/time_to_event
+                    planned_timepoints=outcome_data.get('planned_timepoints'),
+                    data_sources=outcome_data.get('data_source'),
+                    additional_data=outcome_data  # Store full outcome data
+                )
+                db.session.add(outcome)
+                db.session.flush()  # Get outcome ID
+                
+                # Handle multiple timepoints or single timepoint (backward compatibility)
+                timepoints_data = outcome_data.get('timepoints', [])
+                if not timepoints_data and outcome_data.get('timepoint'):
+                    # Convert old single timepoint format to new format
+                    timepoints_data = [{
+                        'timepoint_name': outcome_data.get('timepoint'),
+                        'timepoint_type': 'primary' if outcome_type == 'primary' else 'secondary',
+                        'results_by_arm': outcome_data.get('results_by_arm'),
+                        'between_group_comparison': outcome_data.get('between_group_comparison'),
+                        'data_source': outcome_data.get('data_source')
+                    }]
+                
+                # Add each timepoint
+                for tp_idx, tp_data in enumerate(timepoints_data):
+                    # Extract timepoint information
+                    timepoint_name = tp_data.get('timepoint_name', '')
+                    timepoint_value, timepoint_unit = _parse_timepoint(timepoint_name)
+                    
+                    # Extract statistical data from first arm (for overall values)
+                    first_arm = tp_data.get('results_by_arm', [{}])[0] if tp_data.get('results_by_arm') else {}
+                    
+                    # Extract between-group comparison data
+                    comparison = tp_data.get('between_group_comparison', {})
+                    
+                    timepoint = OutcomeTimepoint(
+                        outcome_id=outcome.id,
+                        study_id=study.id,
+                        timepoint_name=timepoint_name,
+                        timepoint_value=timepoint_value,
+                        timepoint_unit=_safe_truncate(timepoint_unit),
+                        timepoint_type=_safe_truncate(tp_data.get('timepoint_type', outcome_type)),
+                        
+                        # Sample size
+                        n_analyzed=_extract_numeric_value(first_arm.get('n')),
+                        
+                        # Continuous outcome statistics
+                        mean_value=_extract_numeric_value(first_arm.get('mean')),
+                        sd_value=_extract_numeric_value(first_arm.get('sd')),
+                        median_value=_extract_numeric_value(first_arm.get('median')),
+                        iqr_lower=_extract_numeric_value(first_arm.get('iqr_lower')),
+                        iqr_upper=_extract_numeric_value(first_arm.get('iqr_upper')),
+                        ci_95_lower=_extract_numeric_value(first_arm.get('ci_95_lower')),
+                        ci_95_upper=_extract_numeric_value(first_arm.get('ci_95_upper')),
+                        
+                        # Dichotomous outcome statistics
+                        events=_extract_numeric_value(first_arm.get('events')),
+                        total_participants=_extract_numeric_value(first_arm.get('total')),
+                        
+                        # Between-group comparison
+                        effect_measure=comparison.get('effect_measure', '').split(' - Source:')[0].strip(),
+                        effect_estimate=_extract_numeric_value(comparison.get('effect_estimate')),
+                        effect_ci_lower=_extract_numeric_value(comparison.get('ci_95_lower')),
+                        effect_ci_upper=_extract_numeric_value(comparison.get('ci_95_upper')),
+                        p_value=_extract_p_value(comparison.get('p_value')),
+                        p_value_text=_safe_truncate(comparison.get('p_value', '')),
+                        
+                        # Source tracking
+                        data_source=tp_data.get('data_source', ''),
+                        source_confidence=tp_data.get('source_confidence', 'medium'),
+                        
+                        # Store complete arm-by-arm results
+                        results_by_arm=tp_data.get('results_by_arm'),
+                        additional_statistics=comparison
+                    )
+                    db.session.add(timepoint)
+                    
+                    # Set primary timepoint reference
+                    if tp_data.get('timepoint_type') == 'primary' or (outcome_type == 'primary' and tp_idx == 0):
+                        outcome.primary_timepoint_id = timepoint.id    # Add subgroups
     for subgroup_data in data.get('subgroup_analyses', []):
         subgroup = SubgroupAnalysis(
             study_id=study.id,
@@ -1778,18 +2151,64 @@ def _serialize_study(study: Study) -> Dict:
             'primary': [
                 {
                     'outcome_name': o.outcome_name,
-                    'timepoint': o.timepoint,
-                    'results_by_arm': o.results_by_arm,
-                    'effect_estimate': o.effect_estimate
+                    'outcome_category': o.outcome_category,
+                    'planned_timepoints': o.planned_timepoints,
+                    'timepoints': [
+                        {
+                            'timepoint_name': tp.timepoint_name,
+                            'timepoint_value': tp.timepoint_value,
+                            'timepoint_unit': tp.timepoint_unit,
+                            'timepoint_type': tp.timepoint_type,
+                            'n_analyzed': tp.n_analyzed,
+                            'mean_value': tp.mean_value,
+                            'sd_value': tp.sd_value,
+                            'median_value': tp.median_value,
+                            'ci_95_lower': tp.ci_95_lower,
+                            'ci_95_upper': tp.ci_95_upper,
+                            'events': tp.events,
+                            'total_participants': tp.total_participants,
+                            'effect_measure': tp.effect_measure,
+                            'effect_estimate': tp.effect_estimate,
+                            'effect_ci_lower': tp.effect_ci_lower,
+                            'effect_ci_upper': tp.effect_ci_upper,
+                            'p_value': tp.p_value,
+                            'data_source': tp.data_source,
+                            'source_confidence': tp.source_confidence
+                        }
+                        for tp in o.timepoints
+                    ]
                 }
                 for o in study.outcomes if o.outcome_type == 'primary'
             ],
             'secondary': [
                 {
                     'outcome_name': o.outcome_name,
-                    'timepoint': o.timepoint,
-                    'results_by_arm': o.results_by_arm,
-                    'effect_estimate': o.effect_estimate
+                    'outcome_category': o.outcome_category,
+                    'planned_timepoints': o.planned_timepoints,
+                    'timepoints': [
+                        {
+                            'timepoint_name': tp.timepoint_name,
+                            'timepoint_value': tp.timepoint_value,
+                            'timepoint_unit': tp.timepoint_unit,
+                            'timepoint_type': tp.timepoint_type,
+                            'n_analyzed': tp.n_analyzed,
+                            'mean_value': tp.mean_value,
+                            'sd_value': tp.sd_value,
+                            'median_value': tp.median_value,
+                            'ci_95_lower': tp.ci_95_lower,
+                            'ci_95_upper': tp.ci_95_upper,
+                            'events': tp.events,
+                            'total_participants': tp.total_participants,
+                            'effect_measure': tp.effect_measure,
+                            'effect_estimate': tp.effect_estimate,
+                            'effect_ci_lower': tp.effect_ci_lower,
+                            'effect_ci_upper': tp.effect_ci_upper,
+                            'p_value': tp.p_value,
+                            'data_source': tp.data_source,
+                            'source_confidence': tp.source_confidence
+                        }
+                        for tp in o.timepoints
+                    ]
                 }
                 for o in study.outcomes if o.outcome_type == 'secondary'
             ]
