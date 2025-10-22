@@ -12,13 +12,13 @@ echo ========================================
 echo.
 
 REM Check if virtual environment exists
-if not exist "venv\" (
+if not exist ".venv\" (
     echo First time setup detected...
     echo Creating Python virtual environment...
-    python -m venv venv
+    python -m venv .venv
     
     echo Installing dependencies...
-    call venv\Scripts\activate.bat
+    call .venv\Scripts\activate.bat
     pip install --upgrade pip
     pip install -r requirements.txt
     
@@ -28,7 +28,15 @@ if not exist "venv\" (
 )
 
 REM Activate virtual environment
-call venv\Scripts\activate.bat
+echo Activating virtual environment...
+call .venv\Scripts\activate.bat
+if errorlevel 1 (
+    echo ERROR: Failed to activate virtual environment!
+    echo Please ensure .venv exists and try again.
+    pause
+    exit /b 1
+)
+echo Virtual environment activated: .venv
 
 REM Check if .env exists
 if not exist ".env" (
@@ -53,17 +61,20 @@ if not exist ".env" (
 
 REM Check if PostgreSQL is running
 echo Checking PostgreSQL...
-sc query postgresql-x64-15 >nul 2>&1
+sc query postgresql-x64-18 >nul 2>&1
 if errorlevel 1 (
     echo.
     echo WARNING: PostgreSQL service doesn't appear to be running.
     echo Starting PostgreSQL...
-    net start postgresql-x64-15
+    net start postgresql-x64-18
     timeout /t 3 >nul
 )
 
 REM Check if database is initialized
 echo Checking database...
+echo Using Python: 
+python --version
+python -c "import sys; print('Python executable:', sys.executable)"
 python -c "from app import db, app; app.app_context().push(); db.create_all(); print('Database ready!')" 2>nul
 if errorlevel 1 (
     echo Initializing database...

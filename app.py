@@ -320,7 +320,13 @@ class LLMExtractor:
         print(f"Prompt length: {len(prompt)} characters")
         print(f"Tables included: {len(tables) if tables else 0}")
         
+        # Check if prompt is too long
+        if len(prompt) > 100000:  # 100k character limit
+            print(f"⚠️ WARNING: Prompt is very long ({len(prompt)} chars). Truncating...")
+            prompt = prompt[:90000] + "\n\n[Content truncated due to length]"
+        
         try:
+            print("Making OpenAI API request...")
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -338,7 +344,8 @@ class LLMExtractor:
                 ],
                 temperature=0.1,
                 max_tokens=4000,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                timeout=120  # 2 minute timeout
             )
             
             # Store metadata
@@ -371,6 +378,12 @@ class LLMExtractor:
         except json.JSONDecodeError as e:
             print(f"❌ LLM JSON parsing error: {e}")
             print(f"First 500 chars of response: {raw_content[:500] if 'raw_content' in locals() else 'N/A'}")
+            return {}
+        except openai.APITimeoutError as e:
+            print(f"❌ LLM timeout error: Request took too long (>2 minutes): {e}")
+            return {}
+        except openai.APIError as e:
+            print(f"❌ LLM API error: {e}")
             return {}
         except Exception as e:
             print(f"❌ LLM extraction error: {e}")
