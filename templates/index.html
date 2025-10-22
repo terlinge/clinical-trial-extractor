@@ -807,7 +807,7 @@
 
         async function deleteStudy(studyId) {
             const study = allStudies.find(s => s.id === studyId);
-            const studyTitle = study ? (study.study_identification.title || 'this study') : 'this study';
+            const studyTitle = study ? (study.study_identification?.title || 'this study') : 'this study';
             
             if (!confirm(`DELETE STUDY?\n\n"${studyTitle}"\n\nThis will permanently delete all data.\n\nThis CANNOT be undone!\n\nContinue?`)) {
                 return;
