@@ -65,16 +65,17 @@ class Study(db.Model):
     doi = db.Column(db.String(200))
     trial_registration = db.Column(db.String(100))
     
-    study_type = db.Column(db.String(100))
-    blinding = db.Column(db.String(100))
+    study_type = db.Column(db.Text)  # Enhanced to store source citations
+    blinding = db.Column(db.Text)    # Enhanced to store source citations
     randomization = db.Column(db.Text)
-    duration = db.Column(db.String(100))
+    duration = db.Column(db.Text)    # Enhanced to store source citations
     
     population_data = db.Column(db.JSON)
     baseline_characteristics = db.Column(db.JSON)
     
     extraction_metadata = db.Column(db.JSON)
     confidence_scores = db.Column(db.JSON)
+    source_tracking = db.Column(db.JSON)  # New field for detailed source citations
     extraction_date = db.Column(db.DateTime, default=datetime.utcnow)
     
     interventions = db.relationship('Intervention', backref='study', lazy=True, cascade='all, delete-orphan')
@@ -101,10 +102,69 @@ class Outcome(db.Model):
     study_id = db.Column(db.Integer, db.ForeignKey('studies.id'), nullable=False)
     outcome_name = db.Column(db.Text)
     outcome_type = db.Column(db.String(50))  # primary, secondary
-    timepoint = db.Column(db.String(100))
-    results_by_arm = db.Column(db.JSON)
-    effect_estimate = db.Column(db.JSON)
-    confidence_score = db.Column(db.Float)
+    outcome_category = db.Column(db.String(100))  # continuous, dichotomous, time_to_event, count
+    planned_timepoints = db.Column(db.Text)  # All planned measurement times
+    primary_timepoint_id = db.Column(db.Integer)  # Reference to primary timepoint
+    
+    # JSON field for complex outcome data that doesn't need individual querying
+    additional_data = db.Column(db.JSON)  # For complex nested data
+    data_sources = db.Column(db.JSON)  # Source tracking
+    
+    # Relationships to timepoint-specific data
+    timepoints = db.relationship('OutcomeTimepoint', backref='outcome', lazy=True, cascade='all, delete-orphan')
+
+class OutcomeTimepoint(db.Model):
+    """Separate table for each timepoint measurement of an outcome"""
+    __tablename__ = 'outcome_timepoints'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    outcome_id = db.Column(db.Integer, db.ForeignKey('outcomes.id'), nullable=False)
+    study_id = db.Column(db.Integer, db.ForeignKey('studies.id'), nullable=False)  # For direct querying
+    
+    # Timepoint identification
+    timepoint_name = db.Column(db.Text)  # "12 weeks", "end of treatment", "6-month follow-up"
+    timepoint_value = db.Column(db.Float)  # Numeric value: 12, 6, 24
+    timepoint_unit = db.Column(db.String(50))  # "weeks", "months", "days", "years"
+    timepoint_type = db.Column(db.String(50))  # "primary", "secondary", "interim", "follow_up", "post_hoc"
+    
+    # Results that can be efficiently queried
+    n_analyzed = db.Column(db.Integer)  # Sample size at this timepoint
+    
+    # Statistical results (for continuous outcomes)
+    mean_value = db.Column(db.Float)
+    sd_value = db.Column(db.Float)
+    median_value = db.Column(db.Float)
+    iqr_lower = db.Column(db.Float)
+    iqr_upper = db.Column(db.Float)
+    ci_95_lower = db.Column(db.Float)
+    ci_95_upper = db.Column(db.Float)
+    
+    # Results for dichotomous outcomes
+    events = db.Column(db.Integer)
+    total_participants = db.Column(db.Integer)
+    
+    # Between-group comparison results
+    effect_measure = db.Column(db.String(50))  # "MD", "SMD", "OR", "RR", "HR"
+    effect_estimate = db.Column(db.Float)
+    effect_ci_lower = db.Column(db.Float)
+    effect_ci_upper = db.Column(db.Float)
+    p_value = db.Column(db.Float)
+    p_value_text = db.Column(db.String(50))  # For "<0.001", "NS", etc.
+    
+    # Source tracking
+    data_source = db.Column(db.Text)  # "Table 2 page 5", "Figure 1 page 3"
+    source_confidence = db.Column(db.String(20))  # "high", "medium", "low"
+    
+    # JSON for arm-specific results and complex data
+    results_by_arm = db.Column(db.JSON)  # Detailed arm-specific results
+    additional_statistics = db.Column(db.JSON)  # Any other statistical data
+    
+    # Indexes for efficient querying
+    __table_args__ = (
+        db.Index('idx_timepoint_value_unit', 'timepoint_value', 'timepoint_unit'),
+        db.Index('idx_timepoint_type', 'timepoint_type'),
+        db.Index('idx_study_outcome', 'study_id', 'outcome_id'),
+    )
 
 class SubgroupAnalysis(db.Model):
     __tablename__ = 'subgroup_analyses'
@@ -133,6 +193,8 @@ class PDFExtractor:
         self.pdf_path = pdf_path
         self.methods_used = []
         self.page_count = 0
+        self.pages_text = {}  # Store text by page number
+        self.page_metadata = {}  # Store metadata by page
         
     def extract_text_pdfplumber(self) -> str:
         """Extract text using pdfplumber - best for modern PDFs"""
@@ -140,13 +202,25 @@ class PDFExtractor:
             text = ""
             with pdfplumber.open(self.pdf_path) as pdf:
                 self.page_count = len(pdf.pages)
-                for page in pdf.pages:
-                    text += page.extract_text() or ""
+                for page_num, page in enumerate(pdf.pages, 1):
+                    page_text = page.extract_text() or ""
+                    text += page_text
+                    
+                    # Store page-specific data for traceability
+                    self.pages_text[page_num] = page_text
+                    self.page_metadata[page_num] = {
+                        'char_count': len(page_text),
+                        'word_count': len(page_text.split()),
+                        'has_tables': len(page.find_tables()) > 0 if hasattr(page, 'find_tables') else False,
+                        'method': 'pdfplumber_text'
+                    }
+                    
             self.methods_used.append('pdfplumber_text')
-            print(f"PDFPlumber extracted {len(text)} characters from {self.page_count} pages")
+            print(f"✅ PDFPlumber extracted {len(text)} characters from {self.page_count} pages")
+            print(f"📄 Page breakdown: {[(p, meta['word_count']) for p, meta in self.page_metadata.items()]}")
             return text
         except Exception as e:
-            print(f"PDFPlumber text extraction failed: {e}")
+            print(f"❌ PDFPlumber text extraction failed: {e}")
             return ""
     
     def extract_tables_pdfplumber(self) -> List[Dict]:
@@ -233,21 +307,32 @@ class PDFExtractor:
             return []
     
     def extract_with_ocr(self) -> str:
-        """OCR extraction for scanned PDFs or images"""
+        """OCR extraction for scanned PDFs or images - always run for clinical trials"""
         try:
-            images = convert_from_path(self.pdf_path, dpi=300)
+            print("🔍 Converting PDF pages to images for OCR...")
+            # Specify Poppler path explicitly
+            poppler_path = r"C:\poppler\poppler-25.07.0\Library\bin"
+            images = convert_from_path(self.pdf_path, dpi=300, poppler_path=poppler_path)
             text = ""
             
             for i, image in enumerate(images):
+                print(f"📷 OCR processing page {i+1}/{len(images)}...")
                 custom_config = r'--oem 3 --psm 6'
                 page_text = pytesseract.image_to_string(image, config=custom_config)
-                text += f"\n--- Page {i+1} ---\n{page_text}"
+                text += f"\n--- OCR Page {i+1} ---\n{page_text}"
+                
+                # Store OCR-specific page data for traceability
+                if hasattr(self, 'page_metadata'):
+                    if i+1 not in self.page_metadata:
+                        self.page_metadata[i+1] = {}
+                    self.page_metadata[i+1]['ocr_char_count'] = len(page_text)
+                    self.page_metadata[i+1]['ocr_method'] = 'tesseract'
             
             self.methods_used.append('tesseract_ocr')
-            print(f"OCR extracted {len(text)} characters")
+            print(f"✅ OCR extracted {len(text)} characters from {len(images)} pages")
             return text
         except Exception as e:
-            print(f"OCR extraction failed: {e}")
+            print(f"❌ OCR extraction failed: {e}")
             return ""
     
     def comprehensive_extract(self) -> Dict:
@@ -261,11 +346,27 @@ class PDFExtractor:
         
         # Primary text extraction
         text = self.extract_text_pdfplumber()
-        if not text or len(text) < 100:
-            print("Text extraction minimal, trying OCR...")
-            text = self.extract_with_ocr()
         
-        results['text'] = text
+        # Always run OCR for clinical trials to catch figure text and image content
+        print("🔍 Running OCR extraction to capture figure text and image content...")
+        ocr_text = self.extract_with_ocr()
+        
+        # Combine text sources
+        if text and ocr_text:
+            # Use primary text but append unique OCR content
+            combined_text = text + "\n\n=== OCR EXTRACTED CONTENT ===\n" + ocr_text
+            print(f"📄 Combined text: {len(text)} chars (pdfplumber) + {len(ocr_text)} chars (OCR)")
+        elif ocr_text and not text:
+            combined_text = ocr_text
+            print("📄 Using OCR text only (pdfplumber failed)")
+        elif text and not ocr_text:
+            combined_text = text
+            print("📄 Using pdfplumber text only (OCR failed)")
+        else:
+            combined_text = ""
+            print("❌ Both text extraction methods failed")
+        
+        results['text'] = combined_text
         results['page_count'] = self.page_count
         
         # Table extraction - try both methods
@@ -302,8 +403,8 @@ class LLMExtractor:
         self.tokens_used = 0
         self.finish_reason = None
     
-    def extract_trial_data(self, text: str, tables: List[Dict] = None) -> Dict:
-        """Extract comprehensive trial data using GPT-4"""
+    def extract_trial_data(self, text: str, tables: List[Dict] = None, pages_text: Dict = None) -> Dict:
+        """Extract comprehensive trial data using GPT-4 with enhanced source tracking"""
         
         # Prepare context with tables if available
         table_context = ""
@@ -313,17 +414,28 @@ class LLMExtractor:
                 table_context += f"\nTable {i+1} (Page {table.get('page', 'unknown')}, {table.get('rows', 0)} rows x {table.get('cols', 0)} cols):\n"
                 table_context += json.dumps(table['data'][:20], indent=2)
         
-        prompt = self._create_extraction_prompt(text, table_context)
+        # Add page-by-page context for better source tracking
+        page_context = ""
+        if pages_text:
+            page_context = "\n\n=== PAGE-BY-PAGE CONTENT ===\n"
+            for page_num, page_text in pages_text.items():
+                page_context += f"\n--- PAGE {page_num} ---\n"
+                page_context += page_text[:3000]  # First 3000 chars per page
+                if len(page_text) > 3000:
+                    page_context += "\n[PAGE CONTENT TRUNCATED]\n"
+        
+        prompt = self._create_extraction_prompt(text, table_context, page_context)
         
         print(f"\n=== LLM EXTRACTION STARTING ===")
         print(f"Model: {self.model}")
         print(f"Prompt length: {len(prompt)} characters")
         print(f"Tables included: {len(tables) if tables else 0}")
         
-        # Check if prompt is too long
+        # Smart prompt management - prioritize key content
         if len(prompt) > 100000:  # 100k character limit
-            print(f"⚠️ WARNING: Prompt is very long ({len(prompt)} chars). Truncating...")
-            prompt = prompt[:90000] + "\n\n[Content truncated due to length]"
+            print(f"⚠️ WARNING: Prompt is very long ({len(prompt)} chars). Creating focused version...")
+            prompt = self._create_focused_extraction_prompt(text, table_context, tables)
+            print(f"📝 Focused prompt length: {len(prompt)} characters")
         
         try:
             print("Making OpenAI API request...")
@@ -389,11 +501,32 @@ class LLMExtractor:
             print(f"❌ LLM extraction error: {e}")
             return {}
     
-    def _create_extraction_prompt(self, text: str, table_context: str) -> str:
-        """Create comprehensive extraction prompt"""
-        return f"""Extract ALL data from this clinical trial for network meta-analysis. Be EXHAUSTIVE and THOROUGH.
+    def _create_extraction_prompt(self, text: str, table_context: str, page_context: str = "") -> str:
+        """Create comprehensive extraction prompt with enhanced source tracking"""
+        return f"""You are an expert clinical trial data extractor. Extract ALL data with MANDATORY source citations.
 
-CRITICAL INSTRUCTIONS FOR STUDY DESIGN:
+🔍 CRITICAL SOURCE TRACKING RULES:
+1. For EVERY single data point, you MUST specify: "Source: page X" or "Source: Table Y on page Z" or "Source: Figure A on page B"
+2. When you find the same data in multiple places, list ALL sources: "Source: page 2 methods section, Table 1 on page 4"
+3. If you cannot find specific data, write "NOT_FOUND" - do not guess or approximate
+4. Always search the ENTIRE document - abstract, methods, results, tables, figures, appendix
+5. For tables, identify the exact table number and page
+6. For statistical values, specify the exact location where you found each number
+
+📊 DATA COMPLETENESS REQUIREMENTS:
+1. Extract EVERY number, statistic, and parameter - never leave fields as "NOT_SPECIFIED"
+2. Search for missing data in multiple locations: text, tables, figures, appendix
+3. For clinical trials, ALWAYS extract: means, SDs, CIs, p-values, sample sizes, effect estimates
+4. Look for baseline characteristics tables - these contain crucial demographic data
+5. Search for CONSORT diagrams for exact participant flow numbers
+
+🎯 STATISTICAL DATA PRIORITY:
+- Primary outcomes: Extract ALL means, SDs, CIs, p-values with exact sources
+- Baseline characteristics: Age, sex, race, comorbidities with exact table references  
+- Sample sizes: Screened, randomized, analyzed - specify exact source location
+- Effect estimates: Always include confidence intervals and p-values with source
+
+EXTRACT WITH MANDATORY SOURCE CITATIONS:
 1. SEARCH THE ENTIRE METHODS SECTION for study design details
 2. Look for these EXACT phrases: "randomized", "double-blind", "single-blind", "open-label", "placebo-controlled", "multi-center", "single-center", "multicenter", "multicentre"
 3. Look for blinding information in: title, abstract, methods section, and anywhere else
@@ -415,16 +548,41 @@ STATISTICAL PARAMETERS - EXTRACT EVERYTHING:
 
 CRITICAL: Extract PRIMARY and SECONDARY OUTCOMES with ALL statistical details. This is ESSENTIAL for meta-analysis.
 
-Return JSON with this EXACT structure:
+🎯 OUTCOME EXTRACTION REQUIREMENTS:
+1. PRIMARY OUTCOMES: Look for "primary endpoint", "primary outcome", "main outcome" - extract ALL statistics
+2. SECONDARY OUTCOMES: Look for "secondary endpoint", "secondary outcome", "additional outcomes" - extract EVERY ONE
+3. **MULTIPLE TIMEPOINTS**: Extract the SAME outcome measured at DIFFERENT times:
+   - Short-term effects (immediate, 1-7 days)
+   - Medium-term effects (1-12 weeks)  
+   - Long-term effects (3-12+ months)
+   - Follow-up timepoints (post-treatment)
+   - Interim analyses (planned looks during study)
+4. Extract ALL outcomes from results tables - many secondary outcomes are only in tables
+5. Look for Table 2, Table 3, etc. which often contain secondary outcomes
+6. For each outcome, extract: means, SDs, confidence intervals, p-values, sample sizes
+7. Common outcome types in clinical trials:
+   - Clinical endpoints (symptoms, disease progression, events)
+   - Laboratory values (biomarkers, vital signs, lab tests)
+   - Patient-reported outcomes (quality of life, pain scores, functional scales)
+   - Safety outcomes (adverse events, laboratory safety)
+   - Composite endpoints (multiple outcomes combined)
+
+🕐 TIMEPOINT EXTRACTION CRITICAL RULES:
+- Look for phrases: "at 1 week", "at 12 weeks", "at 6 months", "at end of treatment", "at follow-up"
+- Extract data from figures showing time curves (e.g., "week 4", "month 3", "day 30")
+- Find interim results: "interim analysis", "planned interim look"
+- Identify primary vs secondary timepoints: which timepoint is the main endpoint
+- Look for post-hoc timepoint analyses: additional timepoints analyzed after study
+
+Return JSON with this EXACT structure - EVERY field must include source citation:
 {{
   "study_identification": {{
-    "title": "complete title",
-    "authors": ["list all authors"],
-    "journal": "journal name",
-    "year": "YYYY",
-    "doi": "DOI",
-    "trial_registration": "NCT or ISRCTN number",
-    "correspondence_author": "name and email if available"
+    "title": "complete title - Source: page X",
+    "authors": ["list all authors - Source: page X"],
+    "journal": "journal name - Source: page X",
+    "year": "YYYY - Source: page X",
+    "doi": "DOI - Source: page X", 
+    "trial_registration": "NCT or ISRCTN number - Source: page X"
   }},
   "study_design": {{
     "type": "parallel-group RCT/crossover/cluster-randomized/factorial/etc - SEARCH for this in title, abstract, and methods",
@@ -448,15 +606,14 @@ Return JSON with this EXACT structure:
     ]
   }},
   "population": {{
-    "inclusion_criteria": ["criterion 1", "criterion 2"],
-    "exclusion_criteria": ["criterion 1", "criterion 2"],
-    "total_screened": "number screened",
-    "total_randomized": "number randomized",
-    "total_analyzed_itt": "ITT population",
-    "total_analyzed_pp": "per-protocol population",
-    "age_mean": "mean age",
-    "age_sd": "SD",
-    "age_median": "median if reported",
+    "total_screened": "number screened - Source: page X or Table Y",
+    "total_randomized": "number randomized - Source: page X or Table Y", 
+    "total_analyzed_itt": "ITT population - Source: page X or Table Y",
+    "age_mean": "mean age with exact value - Source: Table X page Y",
+    "age_sd": "standard deviation - Source: Table X page Y",
+    "sex_male_percent": "percent male with exact value - Source: Table X page Y",
+    "baseline_characteristics_source": "specify exact table/page where demographics found"
+  }},
     "age_range": "min-max",
     "sex_male_n": "number male",
     "sex_male_percent": "percent male",
@@ -487,41 +644,88 @@ Return JSON with this EXACT structure:
   "outcomes": {{
     "primary": [
       {{
-        "outcome_name": "exact outcome name",
-        "measurement_tool": "scale or instrument used",
-        "timepoint": "when measured",
-        "definition": "how outcome was defined",
-        "results_by_arm": [
+        "outcome_name": "exact outcome name - Source: page X",
+        "outcome_type": "continuous/dichotomous/time_to_event/count - Source: page X",
+        "timepoints": [
           {{
-            "arm": "arm name matching interventions",
-            "n": "number analyzed",
-            "mean": "mean value",
-            "sd": "standard deviation",
-            "se": "standard error",
-            "median": "median",
-            "q1": "first quartile",
-            "q3": "third quartile",
-            "iqr": "interquartile range",
-            "min": "minimum",
-            "max": "maximum",
-            "events": "for binary outcomes",
-            "total": "denominator for binary",
-            "percent": "percentage"
+            "timepoint_name": "exact timepoint description - Source: page X",
+            "timepoint_value": "numeric value - Source: page X", 
+            "timepoint_unit": "days/weeks/months/years - Source: page X",
+            "timepoint_type": "primary/interim/post_hoc/follow_up - Source: page X",
+            "results_by_arm": [
+              {{
+                "arm": "arm name matching interventions",
+                "n": "number analyzed at this timepoint - Source: Table X page Y",
+                "mean": "mean value - Source: Table X page Y",
+                "sd": "standard deviation - Source: Table X page Y", 
+                "median": "median if reported - Source: Table X page Y",
+                "iqr_lower": "IQR lower if reported - Source: Table X page Y",
+                "iqr_upper": "IQR upper if reported - Source: Table X page Y",
+                "ci_95_lower": "95% CI lower bound - Source: Table X page Y",
+                "ci_95_upper": "95% CI upper bound - Source: Table X page Y",
+                "events": "number of events for dichotomous outcomes - Source: Table X page Y",
+                "total": "total participants for dichotomous outcomes - Source: Table X page Y"
+              }}
+            ],
+            "between_group_comparison": {{
+              "effect_measure": "MD/SMD/OR/RR/HR/difference - Source: page X",
+              "effect_estimate": "point estimate - Source: Table X page Y",
+              "ci_95_lower": "lower CI - Source: Table X page Y",
+              "ci_95_upper": "upper CI - Source: Table X page Y", 
+              "p_value": "exact p-value - Source: Table X page Y",
+              "statistical_test": "t-test/ANOVA/chi-square/etc - Source: page X"
+            }},
+            "data_source": "exact location - page X, table Y, figure Z",
+            "source_confidence": "high/medium/low"
           }}
         ],
-        "between_group_comparison": {{
-          "comparison": "which arms compared",
-          "effect_measure": "MD/SMD/OR/RR/HR/etc",
-          "effect_estimate": "point estimate",
-          "ci_95_lower": "lower CI",
-          "ci_95_upper": "upper CI",
-          "p_value": "exact p-value",
-          "statistical_test": "test used"
-        }},
-        "data_source": "text/table X/figure Y"
+        "planned_timepoints": "all planned measurement times - Source: methods section page X",
+        "primary_timepoint": "which timepoint is primary endpoint - Source: page X"
       }}
     ],
-    "secondary": []
+    "secondary": [
+      {{
+        "outcome_name": "exact secondary outcome name - Source: page X",
+        "outcome_type": "continuous/dichotomous/time_to_event/count - Source: page X",
+        "timepoints": [
+          {{
+            "timepoint_name": "exact timepoint description - Source: page X",
+            "timepoint_value": "numeric value - Source: page X", 
+            "timepoint_unit": "days/weeks/months/years - Source: page X",
+            "timepoint_type": "secondary/interim/post_hoc/follow_up - Source: page X",
+            "results_by_arm": [
+              {{
+                "arm": "arm name matching interventions",
+                "n": "number analyzed at this timepoint - Source: Table X page Y",
+                "mean": "mean value - Source: Table X page Y",
+                "sd": "standard deviation - Source: Table X page Y", 
+                "median": "median if reported - Source: Table X page Y",
+                "iqr_lower": "IQR lower if reported - Source: Table X page Y",
+                "iqr_upper": "IQR upper if reported - Source: Table X page Y",
+                "ci_95_lower": "95% CI lower bound - Source: Table X page Y",
+                "ci_95_upper": "95% CI upper bound - Source: Table X page Y",
+                "events": "number of events for dichotomous outcomes - Source: Table X page Y",
+                "total": "total participants for dichotomous outcomes - Source: Table X page Y"
+              }}
+            ],
+            "between_group_comparison": {{
+              "effect_measure": "MD/SMD/OR/RR/HR/difference - Source: page X",
+              "effect_estimate": "point estimate - Source: Table X page Y",
+              "ci_95_lower": "lower CI - Source: Table X page Y",
+              "ci_95_upper": "upper CI - Source: Table X page Y", 
+              "p_value": "exact p-value - Source: Table X page Y",
+              "statistical_test": "t-test/ANOVA/chi-square/etc - Source: page X"
+            }},
+            "data_source": "exact location - page X, table Y, figure Z",
+            "source_confidence": "high/medium/low"
+          }}
+        ],
+        "planned_timepoints": "all planned measurement times - Source: methods section page X"
+      }}
+    ],
+        "source_confidence": "high/medium/low - how confident you are in this source"
+      }}
+    ]
   }},
   "subgroup_analyses": [
     {{
@@ -610,7 +814,204 @@ CLINICAL TRIAL TEXT:
 
 {table_context}
 
-Extract now. Be thorough, search the ENTIRE paper especially Methods section, and list ALL sites/institutions. MAKE SURE to extract primary and secondary outcomes with full statistics."""
+{page_context}
+
+🔍 SPECIAL SEARCH INSTRUCTIONS:
+1. Look for "baseline characteristics" table - extract ALL demographics with exact sources
+2. Look for primary outcome results table - extract means, SDs, CIs with exact table reference  
+3. Search for "Table 1", "Table 2", etc. and specify which table contains which data
+4. Look for CONSORT flow diagram for exact participant numbers
+5. Search figures for any statistical data or effect estimates
+6. Check appendix/supplementary materials mentioned in text
+
+Extract now. MANDATORY: Every single data point must include its source location. Never write "NOT_SPECIFIED" - search harder or write "NOT_FOUND with exact source searched"."""
+
+    def _create_focused_extraction_prompt(self, text: str, table_context: str, tables: List) -> str:
+        """Create focused prompt that prioritizes all outcome data and important tables for ANY clinical trial"""
+        
+        # Generic approach: Extract key sections from any clinical trial
+        key_sections = []
+        
+        # Priority 1: Find results/outcomes sections (universal for all trials)
+        results_sections = []
+        lines = text.split('\n')
+        in_results = False
+        current_section = []
+        
+        # Generic keywords that appear in any clinical trial
+        result_keywords = ['results', 'outcomes', 'endpoint', 'efficacy', 'safety', 'primary', 'secondary', 
+                          'findings', 'analysis', 'comparison', 'treatment', 'intervention']
+        
+        for line in lines:
+            if any(keyword in line.lower() for keyword in result_keywords):
+                if current_section and in_results:
+                    results_sections.append('\n'.join(current_section))
+                current_section = [line]
+                in_results = True
+            elif in_results and current_section:
+                current_section.append(line)
+                if len('\n'.join(current_section)) > 8000:  # Limit section size
+                    results_sections.append('\n'.join(current_section))
+                    current_section = []
+                    in_results = False
+        
+        if current_section and in_results:
+            results_sections.append('\n'.join(current_section))
+        
+        # Priority 2: Find tables with statistical data (universal patterns)
+        key_table_text = ""
+        if table_context:
+            table_lines = table_context.split('\n')
+            statistical_table_lines = []
+            
+            # Generic statistical keywords that appear in any clinical trial table
+            stat_keywords = ['mean', 'sd', 'median', 'ci', 'confidence', 'interval', 'p-value', 'p value',
+                           'n=', 'total', 'group', 'arm', 'treatment', 'control', 'placebo', 'baseline',
+                           'change', 'difference', 'estimate', 'effect', 'outcome', 'endpoint', '%', 'percent']
+            
+            for line in table_lines:
+                if any(keyword in line.lower() for keyword in stat_keywords):
+                    statistical_table_lines.append(line)
+            
+            key_table_text = '\n'.join(statistical_table_lines[:300])  # Increased limit for more data
+        
+        # Priority 3: Extract methods and study design (universal for all trials)
+        methods_text = ""
+        design_keywords = ['abstract', 'background', 'methods', 'design', 'participants', 'interventions', 
+                          'randomized', 'trial', 'study', 'protocol', 'objective']
+        
+        for line in lines[:150]:  # Increased to capture more design info
+            if any(keyword in line.lower() for keyword in design_keywords):
+                methods_text += line + '\n'
+                if len(methods_text) > 4000:  # Increased limit
+                    break
+        
+        # Create focused content prioritizing statistical data
+        focused_text = f"""
+=== STUDY DESIGN & METHODS ===
+{methods_text[:4000]}
+
+=== RESULTS SECTIONS ===
+{(' '.join(results_sections))[:20000]}
+
+=== STATISTICAL DATA TABLES ===
+{key_table_text[:15000]}
+"""
+        
+        return f"""You are an expert clinical trial data extractor. Extract ALL statistical data with MANDATORY source citations.
+
+🎯 UNIVERSAL CLINICAL TRIAL EXTRACTION:
+Extract data from ANY type of clinical trial. Focus on finding ALL statistical values, outcomes, and treatment comparisons.
+
+CRITICAL INSTRUCTIONS:
+1. Extract ALL primary and secondary outcomes with complete statistical data
+2. Find ALL intervention arms with sample sizes and results
+3. Extract ALL means, standard deviations, confidence intervals, p-values, effect estimates
+4. Look for ANY type of endpoint: clinical, laboratory, patient-reported, safety, efficacy
+5. Extract baseline characteristics and demographics for ALL arms
+6. Find ALL between-group comparisons and statistical tests
+7. **MULTIPLE TIMEPOINTS**: Extract the SAME outcome at DIFFERENT measurement times:
+   - Primary analysis timepoint (main endpoint timing)
+   - Secondary analysis timepoints (earlier/later measurements)
+   - Interim analyses (planned looks during study)
+   - Follow-up timepoints (post-treatment assessments)
+   - Post-hoc timepoint analyses
+
+🕐 TIMEPOINT DETECTION:
+- Look for: "at week X", "at month Y", "at day Z", "at end of treatment", "at follow-up"
+- Find time-based tables and figures with multiple measurement points
+- Identify which timepoint is primary endpoint vs secondary timepoints
+- Extract data from survival curves at multiple time cuts (if applicable)
+
+For EVERY data point extracted, specify exact source: "Source: Table X on page Y" or "Source: page Z"
+
+NEVER write "NOT_SPECIFIED" - search for the actual values in tables and text.
+
+Return JSON with this complete structure:
+{{
+  "study_identification": {{
+    "title": "complete title - Source: page X",
+    "authors": ["all authors - Source: page X"],
+    "journal": "journal name - Source: page X",
+    "year": "YYYY - Source: page X",
+    "doi": "DOI - Source: page X",
+    "trial_registration": "registration number - Source: page X"
+  }},
+  "study_design": {{
+    "type": "study type - Source: page X",
+    "blinding": "blinding details - Source: page X",
+    "randomization_method": "randomization method - Source: page X",
+    "duration_total": "study duration - Source: page X"
+  }},
+  "interventions": [
+    {{
+      "arm_name": "exact arm name - Source: page X",
+      "n_randomized": "number randomized - Source: Table X page Y",
+      "n_analyzed": "number analyzed - Source: Table X page Y",
+      "dose": "dose if applicable - Source: page X",
+      "frequency": "frequency if applicable - Source: page X"
+    }}
+  ],
+  "outcomes": {{
+    "primary": [
+      {{
+        "outcome_name": "exact outcome name - Source: page X",
+        "timepoint": "measurement timepoint - Source: page X",
+        "results_by_arm": [
+          {{
+            "arm": "arm name matching interventions",
+            "n": "number analyzed - Source: Table X page Y",
+            "mean": "mean value - Source: Table X page Y",
+            "sd": "standard deviation - Source: Table X page Y",
+            "median": "median if reported - Source: Table X page Y",
+            "ci_95_lower": "95% CI lower - Source: Table X page Y",
+            "ci_95_upper": "95% CI upper - Source: Table X page Y"
+          }}
+        ],
+        "between_group_comparison": {{
+          "effect_measure": "type of effect measure - Source: page X",
+          "effect_estimate": "effect estimate - Source: Table X page Y",
+          "ci_95_lower": "effect CI lower - Source: Table X page Y",
+          "ci_95_upper": "effect CI upper - Source: Table X page Y",
+          "p_value": "exact p-value - Source: Table X page Y"
+        }},
+        "data_source": "exact location where found",
+        "source_confidence": "high/medium/low"
+      }}
+    ],
+    "secondary": [
+      {{
+        "outcome_name": "exact secondary outcome name - Source: page X",
+        "timepoint": "measurement timepoint - Source: page X",
+        "results_by_arm": [
+          {{
+            "arm": "arm name matching interventions",
+            "n": "number analyzed - Source: Table X page Y",
+            "mean": "mean value - Source: Table X page Y",
+            "sd": "standard deviation - Source: Table X page Y",
+            "median": "median if reported - Source: Table X page Y",
+            "ci_95_lower": "95% CI lower - Source: Table X page Y",
+            "ci_95_upper": "95% CI upper - Source: Table X page Y"
+          }}
+        ],
+        "between_group_comparison": {{
+          "effect_measure": "type of effect measure - Source: page X",
+          "effect_estimate": "effect estimate - Source: Table X page Y",
+          "ci_95_lower": "effect CI lower - Source: Table X page Y",
+          "ci_95_upper": "effect CI upper - Source: Table X page Y",
+          "p_value": "exact p-value - Source: Table X page Y"
+        }},
+        "data_source": "exact location where found",
+        "source_confidence": "high/medium/low"
+      }}
+    ]
+  }}
+}}
+
+CLINICAL TRIAL CONTENT TO EXTRACT FROM:
+{focused_text}
+
+EXTRACT ALL STATISTICAL VALUES from any tables or text. Search thoroughly for ALL outcomes and provide exact numbers with source citations."""
 
 # ==================== HEURISTIC EXTRACTION ====================
 
@@ -672,10 +1073,11 @@ class EnsembleExtractor:
         self.pdf_extractor = PDFExtractor(pdf_path)
         pdf_data = self.pdf_extractor.comprehensive_extract()
         
-        # Step 2: LLM extraction
+        # Step 2: LLM extraction with enhanced source tracking
         llm_data = self.llm_extractor.extract_trial_data(
             pdf_data['text'], 
-            pdf_data.get('tables', [])
+            pdf_data.get('tables', []),
+            self.pdf_extractor.pages_text if hasattr(self.pdf_extractor, 'pages_text') else None
         )
         
         # Step 3: Heuristic extraction
@@ -932,18 +1334,91 @@ def re_extract_study(study_id):
             )
             db.session.add(intervention)
         
-        # Add outcomes
+        # Add outcomes with multiple timepoints support
         for outcome_type in ['primary', 'secondary']:
             for outcome_data in extracted_data.get('outcomes', {}).get(outcome_type, []):
+                # Create main outcome record
                 outcome = Outcome(
                     study_id=study.id,
                     outcome_name=outcome_data.get('outcome_name'),
                     outcome_type=outcome_type,
-                    timepoint=outcome_data.get('timepoint'),
-                    results_by_arm=outcome_data.get('results_by_arm'),
-                    effect_estimate=outcome_data.get('between_group_comparison')
+                    outcome_category=outcome_data.get('outcome_type'),  # continuous/dichotomous/time_to_event
+                    planned_timepoints=outcome_data.get('planned_timepoints'),
+                    data_sources=outcome_data.get('data_source'),
+                    additional_data=outcome_data  # Store full outcome data
                 )
                 db.session.add(outcome)
+                db.session.flush()  # Get outcome ID
+                
+                # Handle multiple timepoints or single timepoint (backward compatibility)
+                timepoints_data = outcome_data.get('timepoints', [])
+                if not timepoints_data and outcome_data.get('timepoint'):
+                    # Convert old single timepoint format to new format
+                    timepoints_data = [{
+                        'timepoint_name': outcome_data.get('timepoint'),
+                        'timepoint_type': 'primary' if outcome_type == 'primary' else 'secondary',
+                        'results_by_arm': outcome_data.get('results_by_arm'),
+                        'between_group_comparison': outcome_data.get('between_group_comparison'),
+                        'data_source': outcome_data.get('data_source')
+                    }]
+                
+                # Add each timepoint
+                for tp_idx, tp_data in enumerate(timepoints_data):
+                    # Extract timepoint information
+                    timepoint_name = tp_data.get('timepoint_name', '')
+                    timepoint_value, timepoint_unit = _parse_timepoint(timepoint_name)
+                    
+                    # Extract statistical data from first arm (for overall values)
+                    first_arm = tp_data.get('results_by_arm', [{}])[0] if tp_data.get('results_by_arm') else {}
+                    
+                    # Extract between-group comparison data
+                    comparison = tp_data.get('between_group_comparison', {})
+                    
+                    timepoint = OutcomeTimepoint(
+                        outcome_id=outcome.id,
+                        study_id=study.id,
+                        timepoint_name=timepoint_name,
+                        timepoint_value=timepoint_value,
+                        timepoint_unit=timepoint_unit,
+                        timepoint_type=tp_data.get('timepoint_type', outcome_type),
+                        
+                        # Sample size
+                        n_analyzed=_extract_numeric_value(first_arm.get('n')),
+                        
+                        # Continuous outcome statistics
+                        mean_value=_extract_numeric_value(first_arm.get('mean')),
+                        sd_value=_extract_numeric_value(first_arm.get('sd')),
+                        median_value=_extract_numeric_value(first_arm.get('median')),
+                        iqr_lower=_extract_numeric_value(first_arm.get('iqr_lower')),
+                        iqr_upper=_extract_numeric_value(first_arm.get('iqr_upper')),
+                        ci_95_lower=_extract_numeric_value(first_arm.get('ci_95_lower')),
+                        ci_95_upper=_extract_numeric_value(first_arm.get('ci_95_upper')),
+                        
+                        # Dichotomous outcome statistics
+                        events=_extract_numeric_value(first_arm.get('events')),
+                        total_participants=_extract_numeric_value(first_arm.get('total')),
+                        
+                        # Between-group comparison
+                        effect_measure=comparison.get('effect_measure', '').split(' - Source:')[0].strip(),
+                        effect_estimate=_extract_numeric_value(comparison.get('effect_estimate')),
+                        effect_ci_lower=_extract_numeric_value(comparison.get('ci_95_lower')),
+                        effect_ci_upper=_extract_numeric_value(comparison.get('ci_95_upper')),
+                        p_value=_extract_p_value(comparison.get('p_value')),
+                        p_value_text=comparison.get('p_value', '').split(' - Source:')[0].strip(),
+                        
+                        # Source tracking
+                        data_source=tp_data.get('data_source', ''),
+                        source_confidence=tp_data.get('source_confidence', 'medium'),
+                        
+                        # Store complete arm-by-arm results
+                        results_by_arm=tp_data.get('results_by_arm'),
+                        additional_statistics=comparison
+                    )
+                    db.session.add(timepoint)
+                    
+                    # Set primary timepoint reference
+                    if tp_data.get('timepoint_type') == 'primary' or (outcome_type == 'primary' and tp_idx == 0):
+                        outcome.primary_timepoint_id = timepoint.id
         
         # Add subgroups
         for subgroup_data in extracted_data.get('subgroup_analyses', []):
@@ -999,6 +1474,30 @@ def get_study(study_id):
     study = Study.query.get_or_404(study_id)
     return jsonify(_serialize_study(study))
 
+@app.route('/api/studies/<int:study_id>/sources', methods=['GET'])
+def get_study_sources(study_id):
+    """Get detailed source information for extracted data"""
+    study = Study.query.get_or_404(study_id)
+    
+    # Extract source information from the extracted data
+    sources_analysis = {
+        'study_id': study_id,
+        'title': study.title,
+        'extraction_metadata': study.extraction_metadata or {},
+        'source_breakdown': {},
+        'missing_sources': [],
+        'confidence_by_section': study.confidence_scores or {}
+    }
+    
+    # Analyze sources from outcomes (which should have data_source fields)
+    for outcome in study.outcomes:
+        if outcome.results_by_arm:
+            for arm_data in outcome.results_by_arm or []:
+                if isinstance(arm_data, dict) and 'data_source' in arm_data:
+                    sources_analysis['source_breakdown'][f'outcome_{outcome.id}'] = arm_data.get('data_source')
+    
+    return jsonify(sources_analysis)
+
 @app.route('/api/studies/<int:study_id>', methods=['DELETE'])
 def delete_study(study_id):
     """Delete a study"""
@@ -1018,38 +1517,173 @@ def export_study(study_id):
 # ==================== HELPER FUNCTIONS ====================
 
 def _clean_int_value(value):
-    """Convert 'Not Reported' strings to None for integer fields"""
+    """Convert 'Not Reported' strings to None for integer fields and extract number from source citations"""
     if value in [None, '', 'Not Reported', 'NOT_REPORTED', 'N/A', 'Not reported', 'Not applicable']:
         return None
     if isinstance(value, str):
+        # Handle source citations like "2025 - Source: page 1"
+        if " - Source:" in value:
+            actual_value = value.split(" - Source:")[0].strip()
+        else:
+            actual_value = value
         try:
-            return int(value)
+            return int(actual_value)
         except (ValueError, TypeError):
             return None
     return value
 
+def _extract_value_and_source(value_with_source):
+    """Extract the actual value and source citation separately"""
+    if isinstance(value_with_source, str) and " - Source:" in value_with_source:
+        parts = value_with_source.split(" - Source:", 1)
+        return parts[0].strip(), f"Source: {parts[1].strip()}"
+    return value_with_source, None
+
+def _extract_numeric_value(value_with_source):
+    """Extract numeric value from string that may contain source citations"""
+    if value_with_source is None:
+        return None
+    
+    if isinstance(value_with_source, (int, float)):
+        return float(value_with_source)
+    
+    if isinstance(value_with_source, str):
+        # Remove source citations
+        clean_value = value_with_source.split(" - Source:")[0].strip()
+        
+        # Handle "NOT_SPECIFIED", "NOT_FOUND", etc.
+        if clean_value.upper() in ['NOT_SPECIFIED', 'NOT_FOUND', 'NOT_REPORTED', 'N/A', '']:
+            return None
+            
+        # Try to extract number
+        try:
+            return float(clean_value)
+        except (ValueError, TypeError):
+            # Try to extract first number from string
+            import re
+            numbers = re.findall(r'-?\d+\.?\d*', clean_value)
+            if numbers:
+                return float(numbers[0])
+            return None
+    
+    return None
+
+def _extract_p_value(p_value_string):
+    """Extract numeric p-value from string, handling <0.001, etc."""
+    if p_value_string is None:
+        return None
+    
+    clean_p = str(p_value_string).split(" - Source:")[0].strip()
+    
+    # Handle special cases
+    if clean_p.upper() in ['NS', 'NOT SIGNIFICANT', 'NOT_SPECIFIED', 'NOT_FOUND']:
+        return None
+    
+    # Extract numeric value
+    import re
+    # Handle cases like "<0.001", "p=0.05", "0.001"
+    p_match = re.search(r'([<>=]?\s*)?(\d+\.?\d*(?:[eE]-?\d+)?)', clean_p)
+    if p_match:
+        try:
+            return float(p_match.group(2))
+        except (ValueError, TypeError):
+            return None
+    
+    return None
+
+def _parse_timepoint(timepoint_name):
+    """Parse timepoint string to extract numeric value and unit"""
+    if not timepoint_name or not isinstance(timepoint_name, str):
+        return None, None
+    
+    clean_name = timepoint_name.split(" - Source:")[0].strip().lower()
+    
+    import re
+    # Look for patterns like "12 weeks", "6 months", "24 hours", "1 year"
+    patterns = [
+        r'(\d+\.?\d*)\s*(week|weeks|wk|wks)',
+        r'(\d+\.?\d*)\s*(month|months|mo|mos)',
+        r'(\d+\.?\d*)\s*(day|days|d)',
+        r'(\d+\.?\d*)\s*(year|years|yr|yrs)',
+        r'(\d+\.?\d*)\s*(hour|hours|hr|hrs|h)',
+        r'(\d+\.?\d*)\s*(minute|minutes|min|mins)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, clean_name)
+        if match:
+            value = float(match.group(1))
+            unit = match.group(2)
+            # Normalize units
+            if unit in ['week', 'weeks', 'wk', 'wks']:
+                return value, 'weeks'
+            elif unit in ['month', 'months', 'mo', 'mos']:
+                return value, 'months'
+            elif unit in ['day', 'days', 'd']:
+                return value, 'days'
+            elif unit in ['year', 'years', 'yr', 'yrs']:
+                return value, 'years'
+            elif unit in ['hour', 'hours', 'hr', 'hrs', 'h']:
+                return value, 'hours'
+            elif unit in ['minute', 'minutes', 'min', 'mins']:
+                return value, 'minutes'
+    
+    # Handle special cases
+    if 'baseline' in clean_name:
+        return 0, 'baseline'
+    elif 'end of treatment' in clean_name or 'eot' in clean_name:
+        return None, 'end_of_treatment'
+    elif 'follow' in clean_name:
+        return None, 'follow_up'
+    
+    return None, None
+
 def _save_to_database(data: Dict, metadata: Dict, pdf_hash: str, pdf_blob: bytes, pdf_filename: str) -> Study:
     """Save extracted data to database"""
     
-    # Create study
+    # Extract clean values from source citations
+    title_clean, title_source = _extract_value_and_source(data.get('study_identification', {}).get('title'))
+    year_clean = _clean_int_value(data.get('study_identification', {}).get('year'))
+    journal_clean, journal_source = _extract_value_and_source(data.get('study_identification', {}).get('journal'))
+    doi_clean, doi_source = _extract_value_and_source(data.get('study_identification', {}).get('doi'))
+    trial_reg_clean, trial_reg_source = _extract_value_and_source(data.get('study_identification', {}).get('trial_registration'))
+    
+    # Clean other fields that might contain source citations
+    study_type_clean, study_type_source = _extract_value_and_source(data.get('study_design', {}).get('type'))
+    blinding_clean, blinding_source = _extract_value_and_source(data.get('study_design', {}).get('blinding'))
+    randomization_clean, randomization_source = _extract_value_and_source(data.get('study_design', {}).get('randomization_method'))
+    duration_clean, duration_source = _extract_value_and_source(data.get('study_design', {}).get('duration_total'))
+    
+    # Create study with clean values
     study = Study(
         pdf_hash=pdf_hash,
         pdf_blob=pdf_blob,
         pdf_filename=pdf_filename,
-        title=data.get('study_identification', {}).get('title'),
+        title=title_clean,
         authors=data.get('study_identification', {}).get('authors', []),
-        journal=data.get('study_identification', {}).get('journal'),
-        year=data.get('study_identification', {}).get('year'),
-        doi=data.get('study_identification', {}).get('doi'),
-        trial_registration=data.get('study_identification', {}).get('trial_registration'),
-        study_type=data.get('study_design', {}).get('type'),
-        blinding=data.get('study_design', {}).get('blinding'),
-        randomization=data.get('study_design', {}).get('randomization_method'),
-        duration=data.get('study_design', {}).get('duration_total'),
+        journal=journal_clean,
+        year=year_clean,
+        doi=doi_clean,
+        trial_registration=trial_reg_clean,
+        study_type=study_type_clean,
+        blinding=blinding_clean,
+        randomization=randomization_clean,
+        duration=duration_clean,
         population_data=data.get('population'),
         baseline_characteristics=data.get('population', {}).get('baseline_disease_severity'),
         extraction_metadata=metadata,
-        confidence_scores=metadata.get('confidence_scores')
+        confidence_scores=metadata.get('confidence_scores'),
+        source_tracking={
+            'title_source': title_source,
+            'journal_source': journal_source, 
+            'doi_source': doi_source,
+            'trial_registration_source': trial_reg_source,
+            'study_type_source': study_type_source,
+            'blinding_source': blinding_source,
+            'randomization_source': randomization_source,
+            'duration_source': duration_source,
+            'raw_extraction': data  # Store the original data with sources
+        }
     )
     
     db.session.add(study)
