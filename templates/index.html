@@ -515,14 +515,17 @@
                     <div class="bg-blue-50 p-3 rounded">
                         <p class="text-sm font-semibold text-gray-600">Screened</p>
                         <p class="text-2xl font-bold text-blue-600">${pop.total_screened || 'N/A'}</p>
+                        ${pop.screened_source ? `<p class="text-xs text-gray-500">${pop.screened_source}</p>` : ''}
                     </div>
                     <div class="bg-green-50 p-3 rounded">
                         <p class="text-sm font-semibold text-gray-600">Randomized</p>
                         <p class="text-2xl font-bold text-green-600">${pop.total_randomized || 'N/A'}</p>
+                        ${pop.randomized_source ? `<p class="text-xs text-gray-500">${pop.randomized_source}</p>` : ''}
                     </div>
                     <div class="bg-purple-50 p-3 rounded">
-                        <p class="text-sm font-semibold text-gray-600">Analyzed (ITT)</p>
-                        <p class="text-2xl font-bold text-purple-600">${pop.total_analyzed_itt || 'N/A'}</p>
+                        <p class="text-sm font-semibold text-gray-600">Analyzed</p>
+                        <p class="text-2xl font-bold text-purple-600">${pop.total_analyzed || pop.total_analyzed_itt || 'N/A'}</p>
+                        ${(pop.analyzed_source || pop.total_analyzed_itt) ? `<p class="text-xs text-gray-500">${pop.analyzed_source || 'ITT'}</p>` : ''}
                     </div>
                 </div>
                 

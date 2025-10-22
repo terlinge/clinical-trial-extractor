@@ -1118,6 +1118,13 @@ class HeuristicExtractor:
             'sample_sizes': r'[nN]\s*=\s*(\d+)',
             'percentages': r'(\d+\.?\d*)\s*%',
             'treatment_duration': r'(\d+)\s*(weeks?|months?|days?)',
+            # Participant flow patterns
+            'screened': r'(\d+)\s*(?:patients?|participants?|subjects?)?\s*(?:were\s*)?screened',
+            'assessed_eligibility': r'(\d+)\s*(?:patients?|participants?|subjects?)?\s*(?:were\s*)?assessed\s*for\s*eligibility',
+            'randomized_total': r'(\d+)\s*(?:patients?|participants?|subjects?)?\s*(?:were\s*)?randomized',
+            'analyzed_total': r'(\d+)\s*(?:patients?|participants?|subjects?)?\s*(?:were\s*)?analyzed',
+            'enrolled': r'(\d+)\s*(?:patients?|participants?|subjects?)?\s*(?:were\s*)?enrolled',
+            'consort_flow': r'CONSORT|participant\s*flow|enrollment',
         }
         
         results = {}
@@ -1301,6 +1308,13 @@ class EnsembleExtractor:
                     ensembled['participants'] = {}
                 ensembled['participants'].update(heuristic_data['demographics'])
                 ensembled['participants']['heuristic_source'] = True
+            
+            # CRITICAL: Add participant flow data from heuristic patterns
+            participant_flow = self._extract_participant_flow_from_heuristics(heuristic_data)
+            if participant_flow:
+                if 'participants' not in ensembled:
+                    ensembled['participants'] = {}
+                ensembled['participants'].update(participant_flow)
         
         # Extract demographics from tables if available
         if pdf_data.get('tables'):
@@ -1309,6 +1323,13 @@ class EnsembleExtractor:
                 if 'participants' not in ensembled:
                     ensembled['participants'] = {}
                 ensembled['participants'].update(demographics)
+            
+            # Also check tables for participant flow data
+            table_flow = self._extract_participant_flow_from_tables(pdf_data['tables'])
+            if table_flow:
+                if 'participants' not in ensembled:
+                    ensembled['participants'] = {}
+                ensembled['participants'].update(table_flow)
         
         return ensembled
     
@@ -1394,6 +1415,74 @@ class EnsembleExtractor:
                 break
         
         return demographics
+    
+    def _extract_participant_flow_from_heuristics(self, heuristic_data: Dict) -> Dict:
+        """Extract participant flow data from heuristic pattern matches"""
+        flow_data = {}
+        
+        # Get the highest number for each flow category
+        if heuristic_data.get('screened'):
+            numbers = [int(x) for x in heuristic_data['screened'] if x.isdigit()]
+            if numbers:
+                flow_data['total_screened'] = max(numbers)
+                flow_data['screened_source'] = 'heuristic_pattern'
+        
+        if heuristic_data.get('assessed_eligibility'):
+            numbers = [int(x) for x in heuristic_data['assessed_eligibility'] if x.isdigit()]
+            if numbers:
+                # Use assessed for eligibility as screened if not already found
+                if 'total_screened' not in flow_data:
+                    flow_data['total_screened'] = max(numbers)
+                    flow_data['screened_source'] = 'assessed_eligibility_pattern'
+        
+        if heuristic_data.get('randomized_total'):
+            numbers = [int(x) for x in heuristic_data['randomized_total'] if x.isdigit()]
+            if numbers:
+                flow_data['total_randomized'] = max(numbers)
+                flow_data['randomized_source'] = 'heuristic_pattern'
+        
+        if heuristic_data.get('analyzed_total'):
+            numbers = [int(x) for x in heuristic_data['analyzed_total'] if x.isdigit()]
+            if numbers:
+                flow_data['total_analyzed'] = max(numbers)
+                flow_data['analyzed_source'] = 'heuristic_pattern'
+        
+        if heuristic_data.get('enrolled'):
+            numbers = [int(x) for x in heuristic_data['enrolled'] if x.isdigit()]
+            if numbers:
+                flow_data['total_enrolled'] = max(numbers)
+                flow_data['enrolled_source'] = 'heuristic_pattern'
+        
+        return flow_data
+    
+    def _extract_participant_flow_from_tables(self, tables: List[Dict]) -> Dict:
+        """Extract participant flow data from table content"""
+        flow_data = {}
+        
+        for table in tables:
+            table_text = str(table.get('content', '')).lower()
+            
+            # Look for CONSORT-style flow tables
+            if any(word in table_text for word in ['screened', 'randomized', 'analyzed', 'enrolled', 'flow', 'consort']):
+                # Extract numbers associated with flow terms
+                flow_patterns = {
+                    'total_screened': [r'screened[:\s]*(\d+)', r'assessed.*eligibility[:\s]*(\d+)'],
+                    'total_randomized': [r'randomized[:\s]*(\d+)', r'allocated[:\s]*(\d+)'],
+                    'total_analyzed': [r'analyzed[:\s]*(\d+)', r'completed[:\s]*(\d+)'],
+                    'total_enrolled': [r'enrolled[:\s]*(\d+)', r'recruitment[:\s]*(\d+)']
+                }
+                
+                for flow_key, patterns in flow_patterns.items():
+                    for pattern in patterns:
+                        matches = re.findall(pattern, table_text, re.IGNORECASE)
+                        if matches:
+                            numbers = [int(x) for x in matches if x.isdigit()]
+                            if numbers:
+                                flow_data[flow_key] = max(numbers)
+                                flow_data[f'{flow_key}_source'] = 'table_extraction'
+                                break
+        
+        return flow_data
     
     def _calculate_confidence(self, final_data: Dict, pdf_data: Dict, heuristic_data: Dict) -> Dict:
         """Calculate meaningful confidence scores based on data completeness"""
