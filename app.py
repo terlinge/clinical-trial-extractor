@@ -1078,93 +1078,7 @@ Extract ALL arms, ALL outcomes (primary+secondary), ALL timepoints, ALL statisti
 Return JSON: {{"study_identification":{{"title":"...-Source:p.X","authors":["..."],"year":"YYYY","doi":"...","trial_registration":"..."}}, "study_design":{{"type":"...-Source:p.X","blinding":"...","randomization_method":"...","duration_total":"..."}}, "interventions":[{{"arm_name":"...-Source:p.X","n_randomized":"N-Source:TableX p.Y","n_analyzed":"N-Source:TableX p.Y","dose":"...","frequency":"..."}}], "outcomes":{{"primary":[{{"outcome_name":"...-Source:p.X","timepoint":"X weeks-Source:p.Y","results_by_arm":[{{"arm":"match intervention name","n":"N-Source:TblX p.Y","mean":"value-Source:TblX p.Y","sd":"value-Source:TblX p.Y","ci_95_lower":"value","ci_95_upper":"value"}}],"between_group_comparison":{{"effect_measure":"type","effect_estimate":"value-Source:TblX p.Y","ci_95_lower":"value","ci_95_upper":"value","p_value":"value-Source:TblX p.Y"}}}}],"secondary":[{{"outcome_name":"...-Source:p.X","timepoint":"X weeks","results_by_arm":[{{"arm":"...","n":"N","mean":"value","sd":"value"}}],"between_group_comparison":{{"effect_measure":"...","effect_estimate":"...","ci_95_lower":"...","ci_95_upper":"...","p_value":"..."}}}}]}}}}
 
 CONTENT:
-{focused},
-    "year": "YYYY - Source: page X",
-    "doi": "DOI - Source: page X",
-    "trial_registration": "registration number - Source: page X"
-  }},
-  "study_design": {{
-    "type": "study type - Source: page X",
-    "blinding": "blinding details - Source: page X",
-    "randomization_method": "randomization method - Source: page X",
-    "duration_total": "study duration - Source: page X"
-  }},
-  "interventions": [
-    {{
-      "arm_name": "exact arm name - Source: page X",
-      "n_randomized": "number randomized - Source: Table X page Y",
-      "n_analyzed": "number analyzed - Source: Table X page Y",
-      "dose": "dose if applicable - Source: page X",
-      "frequency": "frequency if applicable - Source: page X"
-    }}
-  ],
-  "outcomes": {{
-    "primary": [
-      {{
-        "outcome_name": "exact outcome name - Source: page X",
-        "timepoint": "measurement timepoint - Source: page X",
-        "results_by_arm": [
-          {{
-            "arm": "arm name matching interventions",
-            "n": "number analyzed - Source: Table X page Y",
-            "mean": "mean value - Source: Table X page Y",
-            "sd": "standard deviation - Source: Table X page Y",
-            "median": "median if reported - Source: Table X page Y",
-            "ci_95_lower": "95% CI lower - Source: Table X page Y",
-            "ci_95_upper": "95% CI upper - Source: Table X page Y"
-          }}
-        ],
-        "between_group_comparison": {{
-          "effect_measure": "type of effect measure - Source: page X",
-          "effect_estimate": "effect estimate - Source: Table X page Y",
-          "ci_95_lower": "effect CI lower - Source: Table X page Y",
-          "ci_95_upper": "effect CI upper - Source: Table X page Y",
-          "p_value": "exact p-value - Source: Table X page Y"
-        }},
-        "data_source": "exact location where found",
-        "source_confidence": "high/medium/low"
-      }}
-    ],
-    "secondary": [
-      {{
-        "outcome_name": "exact secondary outcome name - Source: page X",
-        "timepoint": "measurement timepoint - Source: page X",
-        "results_by_arm": [
-          {{
-            "arm": "arm name matching interventions",
-            "n": "number analyzed - Source: Table X page Y",
-            "mean": "mean value - Source: Table X page Y",
-            "sd": "standard deviation - Source: Table X page Y",
-            "median": "median if reported - Source: Table X page Y",
-            "ci_95_lower": "95% CI lower - Source: Table X page Y",
-            "ci_95_upper": "95% CI upper - Source: Table X page Y"
-          }}
-        ],
-        "between_group_comparison": {{
-          "effect_measure": "type of effect measure - Source: page X",
-          "effect_estimate": "effect estimate - Source: Table X page Y",
-          "ci_95_lower": "effect CI lower - Source: Table X page Y",
-          "ci_95_upper": "effect CI upper - Source: Table X page Y",
-          "p_value": "exact p-value - Source: Table X page Y"
-        }},
-        "data_source": "exact location where found",
-        "source_confidence": "high/medium/low"
-      }}
-    ]
-  }}
-}}
-
-CLINICAL TRIAL CONTENT TO EXTRACT FROM:
-{focused_text}
-
-EXTRACT ALL STATISTICAL VALUES from any tables or text. Search thoroughly for ALL outcomes and provide exact numbers with source citations.
-
-🔍 CRITICAL MISSING DATA TO FIND:
-- TOTAL SCREENED: Look for "screened", "assessed for eligibility", "enrollment"
-- TOTAL RANDOMIZED: ADD UP individual arm numbers OR find explicit total
-- AGE DEMOGRAPHICS: Search "Table 1", "baseline characteristics", "age (years)", "mean age"
-- STANDARD DEVIATIONS: Look for (SD), ±, standard deviation, confidence intervals to calculate SD
-- COMPLETE STATISTICAL RESULTS: Every mean must have SD, every estimate must have complete CI"""
+{focused}"""
 
 # ==================== HEURISTIC EXTRACTION ====================
 
@@ -3136,6 +3050,63 @@ def _serialize_study(study: Study) -> Dict:
     
     return serialized
 
+# Helper function for parsing arm-specific effect estimates
+def _parse_arm_specific_effect(combined_effect_str: str, arm_name: str, all_arms: list) -> dict:
+    """
+    Parse combined effect estimate strings and extract arm-specific values.
+    
+    Example input: "-5.5 percentage points (Orforglipron 6 mg), -6.3 percentage points (Orforglipron 12 mg), -9.1 percentage points (Orforglipron 36 mg)"
+    Returns: For "Orforglipron 6 mg" arm, returns "-5.5 percentage points"
+    
+    Also handles CI format: "-6.5 (Orforglipron 6 mg), -7.3 (Orforglipron 12 mg), -10.1 (Orforglipron 36 mg)"
+    """
+    import re
+    
+    if not combined_effect_str or not arm_name:
+        return {'estimate': combined_effect_str, 'ci_lower': None, 'ci_upper': None}
+    
+    combined_str = str(combined_effect_str)
+    
+    # Try to find arm-specific value in the combined string
+    # Pattern 1: "value (arm_name)" or "value arm_name"
+    # Pattern 2: Handle partial arm name matches (e.g., "6 mg", "12 mg", "36 mg")
+    
+    # Extract key part of arm name (dose)
+    arm_key = arm_name.lower().strip()
+    
+    # Try different patterns to find the value
+    patterns = [
+        rf'([-+]?\d+\.?\d*)\s*(?:percentage points?|mg|cm|%|mmHg)?\s*\([^)]*{re.escape(arm_key)}[^)]*\)',
+        rf'([-+]?\d+\.?\d*)\s*\([^)]*{re.escape(arm_key)}[^)]*\)',
+        rf'([-+]?\d+\.?\d*)\s+{re.escape(arm_key)}'
+    ]
+    
+    # Also try matching just the dose part (e.g., "6 mg", "12 mg")
+    if 'mg' in arm_key or 'placebo' in arm_key.lower():
+        dose_match = re.search(r'(\d+)\s*mg|placebo', arm_key.lower())
+        if dose_match:
+            dose_key = dose_match.group(0)
+            patterns.extend([
+                rf'([-+]?\d+\.?\d*)\s*(?:percentage points?|mg|cm|%|mmHg)?\s*\([^)]*{re.escape(dose_key)}[^)]*\)',
+                rf'([-+]?\d+\.?\d*)\s*\([^)]*{re.escape(dose_key)}[^)]*\)'
+            ])
+    
+    for pattern in patterns:
+        match = re.search(pattern, combined_str, re.IGNORECASE)
+        if match:
+            return {
+                'estimate': match.group(1),
+                'ci_lower': None,
+                'ci_upper': None
+            }
+    
+    # If no match found, return the original combined string
+    return {
+        'estimate': combined_effect_str,
+        'ci_lower': None,
+        'ci_upper': None
+    }
+
 # Export endpoints - FIXED COMPREHENSIVE EXPORT
 @app.route('/api/export/csv/<int:study_id>', methods=['GET'])
 def export_csv(study_id):
@@ -3261,10 +3232,22 @@ def export_csv(study_id):
                 # Create row for each arm
                 if results_by_arm:
                     for arm_data in results_by_arm:
+                        arm_name = arm_data.get('arm', '')
+                        
+                        # Parse arm-specific effect estimate from combined string
+                        effect_estimate_str = comparison_data.get('effect_estimate', '')
+                        ci_lower_str = comparison_data.get('ci_95_lower', '')
+                        ci_upper_str = comparison_data.get('ci_95_upper', '')
+                        
+                        # Extract arm-specific values
+                        arm_effect = _parse_arm_specific_effect(effect_estimate_str, arm_name, results_by_arm)
+                        arm_ci_lower = _parse_arm_specific_effect(ci_lower_str, arm_name, results_by_arm)
+                        arm_ci_upper = _parse_arm_specific_effect(ci_upper_str, arm_name, results_by_arm)
+                        
                         row = {
                             'Outcome_Name': outcome.outcome_name,
                             'Timepoint': timepoint_str,
-                            'Arm': arm_data.get('arm', ''),
+                            'Arm': arm_name,
                             'N_Analyzed': arm_data.get('n'),
                             'Mean': arm_data.get('mean'),
                             'SD': arm_data.get('sd'),
@@ -3274,12 +3257,12 @@ def export_csv(study_id):
                             'Events': arm_data.get('events'),
                             'Total': arm_data.get('total'),
                             'Percent': arm_data.get('percent'),
-                            # Add between-group comparison (same for all rows)
+                            # Add arm-specific between-group comparison
                             'Effect_Type': comparison_data.get('effect_measure'),
-                            'Effect_Estimate': comparison_data.get('effect_estimate'),
-                            'CI_95_Lower': comparison_data.get('ci_95_lower'),
-                            'CI_95_Upper': comparison_data.get('ci_95_upper'),
-                            'P_Value': comparison_data.get('p_value')
+                            'Effect_Estimate': arm_effect.get('estimate'),
+                            'CI_95_Lower': arm_ci_lower.get('estimate'),
+                            'CI_95_Upper': arm_ci_upper.get('estimate'),
+                            'P_Value': comparison_data.get('p_value')  # P-value typically same for all
                         }
                         outcome_rows.append(row)
                 else:
@@ -3344,20 +3327,33 @@ def export_csv(study_id):
                 # Create row for each arm
                 if results_by_arm:
                     for arm_data in results_by_arm:
+                        arm_name = arm_data.get('arm', '')
+                        
+                        # Parse arm-specific effect estimate from combined string
+                        effect_estimate_str = comparison_data.get('effect_estimate', '')
+                        ci_lower_str = comparison_data.get('ci_95_lower', '')
+                        ci_upper_str = comparison_data.get('ci_95_upper', '')
+                        
+                        # Extract arm-specific values
+                        arm_effect = _parse_arm_specific_effect(effect_estimate_str, arm_name, results_by_arm)
+                        arm_ci_lower = _parse_arm_specific_effect(ci_lower_str, arm_name, results_by_arm)
+                        arm_ci_upper = _parse_arm_specific_effect(ci_upper_str, arm_name, results_by_arm)
+                        
                         row = {
                             'Outcome_Name': outcome.outcome_name,
                             'Timepoint': timepoint_str,
-                            'Arm': arm_data.get('arm', ''),
+                            'Arm': arm_name,
                             'N_Analyzed': arm_data.get('n'),
                             'Mean': arm_data.get('mean'),
                             'SD': arm_data.get('sd'),
                             'Events': arm_data.get('events'),
                             'Total': arm_data.get('total'),
+                            # Add arm-specific between-group comparison
                             'Effect_Type': comparison_data.get('effect_measure'),
-                            'Effect_Estimate': comparison_data.get('effect_estimate'),
-                            'CI_95_Lower': comparison_data.get('ci_95_lower'),
-                            'CI_95_Upper': comparison_data.get('ci_95_upper'),
-                            'P_Value': comparison_data.get('p_value')
+                            'Effect_Estimate': arm_effect.get('estimate'),
+                            'CI_95_Lower': arm_ci_lower.get('estimate'),
+                            'CI_95_Upper': arm_ci_upper.get('estimate'),
+                            'P_Value': comparison_data.get('p_value')  # P-value typically same for all
                         }
                         sec_rows.append(row)
                 else:
