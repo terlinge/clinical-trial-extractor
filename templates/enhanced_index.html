@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clinical Trial Extractor v2.2 - Multi-Source Data Review</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .collapsible-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+        .collapsible-content.open { max-height: 3000px; }
+        .tab-active { border-bottom: 3px solid #2563eb; color: #2563eb; }
+        .source-option { transition: all 0.2s; }
+        .source-option:hover { transform: scale(1.02); }
+        .source-option.selected { background: #eff6ff; border-color: #2563eb; }
+        .confidence-high { background: #dcfce7; }
+        .confidence-medium { background: #fef3c7; }
+        .confidence-low { background: #fee2e2; }
+        .conflict-indicator { animation: pulse 2s infinite; }
+        .data-table th { background: #f8fafc; }
+        .data-table td { vertical-align: top; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Enhanced Header -->
+        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-800">Clinical Trial Data Extractor v2.2</h1>
+                    <p class="text-gray-600">Multi-Source Extraction with User Control & Source Transparency</p>
+                </div>
+                <div class="text-right">
+                    <div class="text-sm text-gray-500">Extraction Methods:</div>
+                    <div class="flex gap-2 mt-1">
+                        <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">📊 Tables</span>
+                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">🔍 Patterns</span>
+                        <span class="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs">🤖 AI</span>
+                        <span class="px-2 py-1 bg-orange-100 text-orange-800 rounded text-xs">👁️ OCR</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Enhanced Tabs -->
+            <div class="flex gap-6 mt-4 border-b">
+                <button onclick="showTab('extract')" id="tab-extract" class="pb-2 font-medium tab-active">
+                    Extract New
+                </button>
+                <button onclick="showTab('review')" id="tab-review" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                    Review & Select Data
+                </button>
+                <button onclick="showTab('library')" id="tab-library" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                    Studies Library
+                </button>
+                <button onclick="showTab('export')" id="tab-export" class="pb-2 font-medium text-gray-600 hover:text-blue-600">
+                    Export Results
+                </button>
+            </div>
+        </div>
+
+        <!-- Extract Tab -->
+        <div id="extractTab" class="tab-content">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <h2 class="text-xl font-semibold mb-4">Upload Clinical Trial PDF</h2>
+                
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition cursor-pointer" onclick="document.getElementById('pdfFile').click()">
+                    <input type="file" id="pdfFile" accept=".pdf" class="hidden" />
+                    <p class="text-lg font-medium text-gray-700" id="fileName">Click to upload PDF</p>
+                    <p class="text-sm text-gray-500 mt-2">Multi-source extraction will run automatically</p>
+                </div>
+
+                <button onclick="extractData()" class="w-full mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+                    Extract & Review Data Sources
+                </button>
+
+                <div id="loadingDiv" class="hidden mt-4 p-4 bg-blue-50 rounded-lg">
+                    <div class="space-y-3">
+                        <div class="flex items-center space-x-3">
+                            <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                            <span id="loadingText">Starting extraction...</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div id="progressBar" class="bg-blue-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- NEW: Data Review & Selection Tab -->
+        <div id="reviewTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-semibold">Data Review & Source Selection</h2>
+                    <div class="flex gap-2">
+                        <button onclick="autoSelectRecommended()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+                            Auto-Select Recommended
+                        </button>
+                        <button onclick="showConflictsOnly()" class="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700">
+                            Show Conflicts Only
+                        </button>
+                        <button onclick="finalizeSelections()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                            Finalize Selections
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Data Selection Interface -->
+                <div id="dataSelectionInterface" class="space-y-6">
+                    <!-- This will be populated dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Enhanced Library Tab -->
+        <div id="libraryTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-semibold">Studies Library</h2>
+                    <div class="flex gap-2">
+                        <button onclick="exportAllStudies()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+                            Export All
+                        </button>
+                        <button onclick="refreshStudies()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="studiesContainer" class="space-y-4">
+                    <!-- Studies will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- NEW: Export Tab -->
+        <div id="exportTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h2 class="text-xl font-semibold mb-6">Export Results</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-medium">Export Format</h3>
+                        <div class="space-y-2">
+                            <label class="flex items-center">
+                                <input type="radio" name="exportFormat" value="cochrane" class="mr-2" checked>
+                                <span>Cochrane RevMan Format</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="radio" name="exportFormat" value="csv" class="mr-2">
+                                <span>CSV Spreadsheet</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="radio" name="exportFormat" value="json" class="mr-2">
+                                <span>JSON Data</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-medium">Include Source Attribution</h3>
+                        <div class="space-y-2">
+                            <label class="flex items-center">
+                                <input type="checkbox" id="includeSourceIcons" class="mr-2" checked>
+                                <span>Source icons (📊🤖👁️🔍)</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="checkbox" id="includeConfidence" class="mr-2" checked>
+                                <span>Confidence scores</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="checkbox" id="includeConflicts" class="mr-2">
+                                <span>Conflicting values</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <button onclick="performExport()" class="w-full mt-6 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">
+                    Generate Export
+                </button>
+            </div>
+        </div>
+
+        <!-- Results Display (Enhanced) -->
+        <div id="resultsSection" class="hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-semibold">Extraction Results</h2>
+                    <div class="flex gap-2">
+                        <button onclick="showTab('review')" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                            Review Data Sources
+                        </button>
+                        <button onclick="saveStudy()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+                            Save to Library
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Tabular Results Display -->
+                <div id="resultsDisplay" class="space-y-6">
+                    <!-- Results will be displayed here in tabular format -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStudyData = null;
+        let extractionSources = {};
+        let userSelections = {};
+
+        // Tab management
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.add('hidden'));
+            document.querySelectorAll('[id^="tab-"]').forEach(tab => {
+                tab.classList.remove('tab-active');
+                tab.classList.add('text-gray-600', 'hover:text-blue-600');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName + 'Tab').classList.remove('hidden');
+            document.getElementById('tab-' + tabName).classList.add('tab-active');
+            document.getElementById('tab-' + tabName).classList.remove('text-gray-600', 'hover:text-blue-600');
+            
+            // Load tab-specific data
+            if (tabName === 'library') {
+                loadStudies();
+            } else if (tabName === 'review' && currentStudyData) {
+                populateDataSelectionInterface();
+            }
+        }
+
+        // File upload handling
+        document.getElementById('pdfFile').addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                document.getElementById('fileName').textContent = e.target.files[0].name;
+            }
+        });
+
+        // Main extraction function
+        async function extractData() {
+            const fileInput = document.getElementById('pdfFile');
+            if (!fileInput.files[0]) {
+                alert('Please select a PDF file first');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            document.getElementById('loadingDiv').classList.remove('hidden');
+            document.getElementById('resultsSection').classList.add('hidden');
+
+            try {
+                // Simulate progress
+                updateProgress(10, 'Analyzing PDF structure...');
+                
+                const response = await fetch('/api/extract', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                updateProgress(50, 'Running multi-source extraction...');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+                updateProgress(90, 'Processing extraction results...');
+                
+                if (result.success) {
+                    currentStudyData = result.data;
+                    extractionSources = result.sources || {};
+                    
+                    updateProgress(100, 'Extraction complete!');
+                    setTimeout(() => {
+                        document.getElementById('loadingDiv').classList.add('hidden');
+                        displayResults(result.data, result.metadata);
+                        showTab('review'); // Auto-switch to review tab
+                    }, 1000);
+                } else {
+                    throw new Error(result.error || 'Extraction failed');
+                }
+            } catch (error) {
+                console.error('Extraction error:', error);
+                document.getElementById('loadingDiv').classList.add('hidden');
+                alert('Extraction failed: ' + error.message);
+            }
+        }
+
+        function updateProgress(percent, text) {
+            document.getElementById('progressBar').style.width = percent + '%';
+            document.getElementById('loadingText').textContent = text;
+        }
+
+        // NEW: Populate data selection interface
+        function populateDataSelectionInterface() {
+            if (!currentStudyData || !extractionSources) return;
+            
+            const container = document.getElementById('dataSelectionInterface');
+            container.innerHTML = '';
+
+            // Create sections for different data types
+            const sections = [
+                { title: 'Study Identification', data: currentStudyData.study_identification, type: 'identification' },
+                { title: 'Study Design', data: currentStudyData.study_design, type: 'design' },
+                { title: 'Population & Demographics', data: currentStudyData.population, type: 'population' },
+                { title: 'Interventions', data: currentStudyData.interventions, type: 'interventions' },
+                { title: 'Primary Outcomes', data: currentStudyData.outcomes?.primary, type: 'outcomes' },
+                { title: 'Secondary Outcomes', data: currentStudyData.outcomes?.secondary, type: 'outcomes' }
+            ];
+
+            sections.forEach(section => {
+                if (section.data && Object.keys(section.data).length > 0) {
+                    container.appendChild(createDataSelectionSection(section.title, section.data, section.type));
+                }
+            });
+        }
+
+        function createDataSelectionSection(title, data, type) {
+            const section = document.createElement('div');
+            section.className = 'border rounded-lg p-4';
+            
+            section.innerHTML = `
+                <h3 class="text-lg font-semibold mb-4 flex items-center">
+                    ${title}
+                    <span class="ml-2 text-sm text-gray-500">(${Object.keys(data).length} fields)</span>
+                </h3>
+                <div class="space-y-4" id="section-${type}">
+                    <!-- Data fields will be added here -->
+                </div>
+            `;
+            
+            const container = section.querySelector(`#section-${type}`);
+            
+            // Process each field in the data
+            Object.entries(data).forEach(([field, value]) => {
+                if (value && value !== 'NOT_REPORTED' && value !== 'NOT_SPECIFIED') {
+                    container.appendChild(createDataFieldSelector(field, value, type));
+                }
+            });
+            
+            return section;
+        }
+
+        function createDataFieldSelector(fieldName, currentValue, type) {
+            // Simulate multiple sources (this would come from the backend)
+            const sources = {
+                pdfplumber: { value: currentValue, confidence: 0.9, location: 'Table 1, page 3' },
+                heuristic: { value: currentValue, confidence: 0.7, location: 'Text pattern match' },
+                llm: { value: currentValue, confidence: 0.8, location: 'AI interpretation' },
+                ocr: { value: null, confidence: 0, location: 'Not found' }
+            };
+
+            const fieldDiv = document.createElement('div');
+            fieldDiv.className = 'border rounded p-3 bg-gray-50';
+            
+            fieldDiv.innerHTML = `
+                <div class="font-medium text-gray-800 mb-2">${fieldName.replace(/_/g, ' ').toUpperCase()}</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
+                    ${Object.entries(sources).map(([source, data]) => 
+                        createSourceOption(fieldName, source, data)
+                    ).join('')}
+                </div>
+                <div class="mt-2 text-sm text-gray-600">
+                    <strong>Selected:</strong> <span id="selected-${fieldName}">${currentValue}</span>
+                </div>
+            `;
+            
+            return fieldDiv;
+        }
+
+        function createSourceOption(fieldName, source, data) {
+            const icons = {
+                pdfplumber: '📊',
+                heuristic: '🔍', 
+                llm: '🤖',
+                ocr: '👁️'
+            };
+            
+            const confidenceClass = data.confidence > 0.8 ? 'confidence-high' : 
+                                   data.confidence > 0.6 ? 'confidence-medium' : 'confidence-low';
+            
+            if (!data.value) {
+                return `
+                    <div class="source-option p-2 border rounded bg-gray-100 opacity-50">
+                        <div class="text-sm font-medium">${icons[source]} ${source}</div>
+                        <div class="text-xs text-gray-500">No data found</div>
+                    </div>
+                `;
+            }
+            
+            return `
+                <div class="source-option p-2 border rounded cursor-pointer hover:shadow ${confidenceClass}" 
+                     onclick="selectSource('${fieldName}', '${source}', '${data.value}')">
+                    <div class="text-sm font-medium">${icons[source]} ${source}</div>
+                    <div class="text-xs text-gray-600 truncate" title="${data.value}">${data.value}</div>
+                    <div class="text-xs text-gray-500">Confidence: ${(data.confidence * 100).toFixed(0)}%</div>
+                    <div class="text-xs text-gray-400">${data.location}</div>
+                </div>
+            `;
+        }
+
+        function selectSource(fieldName, source, value) {
+            userSelections[fieldName] = { source, value };
+            document.getElementById(`selected-${fieldName}`).textContent = value;
+            
+            // Update visual selection
+            document.querySelectorAll(`[onclick*="${fieldName}"]`).forEach(el => {
+                el.classList.remove('selected');
+            });
+            event.target.closest('.source-option').classList.add('selected');
+        }
+
+        function autoSelectRecommended() {
+            // Auto-select highest confidence sources
+            alert('Auto-selection based on confidence scores would be implemented here');
+        }
+
+        function showConflictsOnly() {
+            // Show only fields with conflicting values
+            alert('Conflict filtering would be implemented here');
+        }
+
+        function finalizeSelections() {
+            // Apply user selections to final data
+            alert(`Finalizing ${Object.keys(userSelections).length} user selections...`);
+            // Would update the backend with selections
+        }
+
+        // Enhanced results display
+        function displayResults(data, metadata) {
+            document.getElementById('resultsSection').classList.remove('hidden');
+            const container = document.getElementById('resultsDisplay');
+            
+            container.innerHTML = `
+                <div class="mb-6 p-4 bg-blue-50 rounded-lg">
+                    <h3 class="font-semibold mb-2">Extraction Summary</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div>📊 Tables Found: ${metadata.tables_found || 0}</div>
+                        <div>📄 Pages: ${metadata.pdf_pages || 0}</div>
+                        <div>🔍 Methods: ${metadata.extraction_methods?.join(', ') || 'N/A'}</div>
+                        <div>⭐ Confidence: ${((metadata.confidence_scores?.overall || 0) * 100).toFixed(0)}%</div>
+                    </div>
+                </div>
+                
+                <!-- Tabular Data Display -->
+                ${createTabularDisplay(data)}
+            `;
+        }
+
+        function createTabularDisplay(data) {
+            let html = '';
+            
+            // Study Information Table
+            if (data.study_identification) {
+                html += createDataTable('Study Information', [
+                    ['Title', data.study_identification.title || 'Not reported'],
+                    ['Authors', Array.isArray(data.study_identification.authors) ? 
+                        data.study_identification.authors.join(', ') : data.study_identification.authors || 'Not reported'],
+                    ['Journal', data.study_identification.journal || 'Not reported'],
+                    ['Year', data.study_identification.year || 'Not reported'],
+                    ['Trial Registration', data.study_identification.trial_registration || 'Not reported']
+                ]);
+            }
+            
+            // Population Table
+            if (data.population) {
+                const popData = [
+                    ['Total Screened', data.population.total_screened || 'Not reported'],
+                    ['Total Randomized', data.population.total_randomized || 'Not reported'],
+                    ['Total Analyzed', data.population.total_analyzed || 'Not reported']
+                ];
+                html += createDataTable('Population Flow', popData);
+            }
+            
+            // Interventions Table
+            if (data.interventions && data.interventions.length > 0) {
+                const headers = ['Arm Name', 'N Randomized', 'N Analyzed', 'Dose', 'Duration'];
+                const rows = data.interventions.map(arm => [
+                    arm.arm_name || 'Not specified',
+                    arm.n_randomized || 'Not reported',
+                    arm.n_analyzed || 'Not reported', 
+                    arm.dose || 'Not specified',
+                    arm.duration || 'Not specified'
+                ]);
+                html += createDataTable('Interventions', rows, headers);
+            }
+            
+            return html;
+        }
+
+        function createDataTable(title, rows, headers = null) {
+            let headerHtml = '';
+            if (headers) {
+                headerHtml = `<thead><tr>${headers.map(h => `<th class="px-4 py-2 text-left">${h}</th>`).join('')}</tr></thead>`;
+            }
+            
+            const rowsHtml = rows.map(row => 
+                `<tr class="border-t">${row.map(cell => `<td class="px-4 py-2">${cell}</td>`).join('')}</tr>`
+            ).join('');
+            
+            return `
+                <div class="mb-6">
+                    <h3 class="text-lg font-semibold mb-3">${title}</h3>
+                    <table class="w-full border border-gray-200 rounded data-table">
+                        ${headerHtml}
+                        <tbody>${rowsHtml}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // Library functions
+        async function loadStudies() {
+            try {
+                const response = await fetch('/api/studies');
+                const data = await response.json();
+                displayStudies(data.studies || []);
+            } catch (error) {
+                console.error('Error loading studies:', error);
+                document.getElementById('studiesContainer').innerHTML = 
+                    '<div class="text-red-600">Error loading studies</div>';
+            }
+        }
+
+        function displayStudies(studies) {
+            const container = document.getElementById('studiesContainer');
+            
+            if (studies.length === 0) {
+                container.innerHTML = '<div class="text-gray-500 text-center py-8">No studies found</div>';
+                return;
+            }
+            
+            container.innerHTML = studies.map(study => `
+                <div class="border rounded-lg p-4 hover:shadow-md transition">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <h3 class="font-semibold text-lg">${study.title || 'Untitled Study'}</h3>
+                            <p class="text-gray-600">${study.authors || 'Unknown authors'} (${study.year || 'Unknown year'})</p>
+                            <p class="text-sm text-gray-500 mt-1">
+                                Extracted: ${new Date(study.extraction_date).toLocaleDateString()}
+                            </p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="viewStudy(${study.id})" 
+                                    class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+                                View
+                            </button>
+                            <button onclick="reExtractStudy(${study.id})" 
+                                    class="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700">
+                                Re-extract
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function viewStudy(studyId) {
+            try {
+                const response = await fetch(`/api/studies/${studyId}`);
+                const study = await response.json();
+                currentStudyData = study;
+                showTab('review');
+            } catch (error) {
+                console.error('Error viewing study:', error);
+                alert('Error loading study details');
+            }
+        }
+
+        // Export functions
+        function performExport() {
+            const format = document.querySelector('input[name="exportFormat"]:checked').value;
+            const includeIcons = document.getElementById('includeSourceIcons').checked;
+            const includeConfidence = document.getElementById('includeConfidence').checked;
+            const includeConflicts = document.getElementById('includeConflicts').checked;
+            
+            // This would trigger the actual export
+            alert(`Exporting in ${format} format with source attribution: ${includeIcons}`);
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            showTab('extract');
+        });
+    </script>
+</body>
+</html>

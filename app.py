@@ -144,12 +144,12 @@ class OutcomeTimepoint(db.Model):
     total_participants = db.Column(db.Integer)
     
     # Between-group comparison results
-    effect_measure = db.Column(db.String(50))  # "MD", "SMD", "OR", "RR", "HR"
+    effect_measure = db.Column(db.String(200))  # "MD", "SMD", "OR", "RR", "HR", or longer descriptions
     effect_estimate = db.Column(db.Float)
     effect_ci_lower = db.Column(db.Float)
     effect_ci_upper = db.Column(db.Float)
     p_value = db.Column(db.Float)
-    p_value_text = db.Column(db.String(50))  # For "<0.001", "NS", etc.
+    p_value_text = db.Column(db.String(200))  # For "<0.001", "NS", etc.
     
     # Source tracking
     data_source = db.Column(db.Text)  # "Table 2 page 5", "Figure 1 page 3"
@@ -183,6 +183,169 @@ class AdverseEvent(db.Model):
     event_name = db.Column(db.Text)
     severity = db.Column(db.String(50))
     results_by_arm = db.Column(db.JSON)
+
+# ==================== MULTI-SOURCE DATA MODELS ====================
+
+class ExtractionSource(db.Model):
+    """Store raw extraction data from each method"""
+    __tablename__ = 'extraction_sources'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    study_id = db.Column(db.Integer, db.ForeignKey('studies.id'), nullable=False)
+    
+    # Source identification
+    extraction_method = db.Column(db.String(50), nullable=False)  # 'pdfplumber', 'ocr', 'llm', 'heuristic'
+    source_version = db.Column(db.String(20))  # Track version/model used
+    extraction_timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Raw extracted data
+    raw_data = db.Column(db.JSON)  # Complete extraction result
+    confidence_score = db.Column(db.Float)  # 0.0 - 1.0 confidence
+    quality_metrics = db.Column(db.JSON)  # Method-specific quality indicators
+    
+    # Processing metadata
+    processing_time = db.Column(db.Float)  # Seconds
+    error_messages = db.Column(db.JSON)  # Any warnings/errors
+    success_status = db.Column(db.Boolean, default=True)
+    
+    # Index for efficient querying
+    __table_args__ = (
+        db.Index('idx_study_method', 'study_id', 'extraction_method'),
+    )
+
+class DataElement(db.Model):
+    """Individual data elements with source attribution"""
+    __tablename__ = 'data_elements'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    study_id = db.Column(db.Integer, db.ForeignKey('studies.id'), nullable=False)
+    
+    # Data identification
+    element_type = db.Column(db.String(50), nullable=False)  # 'outcome', 'intervention', 'demographic', 'design'
+    element_name = db.Column(db.String(200))  # Specific field name
+    element_path = db.Column(db.String(500))  # JSON path for nested data
+    
+    # Values from different sources
+    pdfplumber_value = db.Column(db.Text)
+    pdfplumber_confidence = db.Column(db.Float)
+    pdfplumber_source_location = db.Column(db.String(200))  # "Table 2, page 5"
+    
+    ocr_value = db.Column(db.Text)
+    ocr_confidence = db.Column(db.Float)
+    ocr_source_location = db.Column(db.String(200))
+    
+    llm_value = db.Column(db.Text)
+    llm_confidence = db.Column(db.Float)
+    llm_source_location = db.Column(db.String(200))
+    
+    heuristic_value = db.Column(db.Text)
+    heuristic_confidence = db.Column(db.Float)
+    heuristic_source_location = db.Column(db.String(200))
+    
+    # User selection
+    selected_source = db.Column(db.String(50))  # Which source user chose
+    selected_value = db.Column(db.Text)  # Final value after user selection
+    user_notes = db.Column(db.Text)  # User annotations
+    selection_timestamp = db.Column(db.DateTime)
+    
+    # Validation flags
+    is_validated = db.Column(db.Boolean, default=False)
+    needs_review = db.Column(db.Boolean, default=False)
+    conflicting_sources = db.Column(db.Boolean, default=False)
+    
+    # Indexes
+    __table_args__ = (
+        db.Index('idx_study_element_type', 'study_id', 'element_type'),
+        db.Index('idx_needs_review', 'needs_review'),
+        db.Index('idx_conflicting', 'conflicting_sources'),
+    )
+
+class UserPreferences(db.Model):
+    """Store user preferences for data source selection"""
+    __tablename__ = 'user_preferences'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(100))  # Future user system integration
+    
+    # Global preferences
+    preferred_source_order = db.Column(db.JSON)  # ["pdfplumber", "heuristic", "llm", "ocr"]
+    auto_select_rules = db.Column(db.JSON)  # Automatic selection rules
+    
+    # Element-specific preferences
+    element_type = db.Column(db.String(50))  # Optional: specific to element type
+    confidence_threshold = db.Column(db.Float, default=0.7)  # Minimum confidence for auto-selection
+    
+    # Systematic review settings
+    require_manual_review = db.Column(db.Boolean, default=True)  # Always require user validation
+    highlight_conflicts = db.Column(db.Boolean, default=True)  # Show conflicting values
+    show_all_sources = db.Column(db.Boolean, default=True)  # Display all extraction results
+    
+    created_date = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_date = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ExtractionConflict(db.Model):
+    """Track conflicts between different extraction methods"""
+    __tablename__ = 'extraction_conflicts'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    study_id = db.Column(db.Integer, db.ForeignKey('studies.id'), nullable=False)
+    data_element_id = db.Column(db.Integer, db.ForeignKey('data_elements.id'), nullable=False)
+    
+    # Conflict details
+    conflict_type = db.Column(db.String(50))  # 'value_mismatch', 'missing_data', 'quality_concern'
+    severity = db.Column(db.String(20))  # 'low', 'medium', 'high'
+    
+    # Conflicting values
+    source_a = db.Column(db.String(50))
+    value_a = db.Column(db.Text)
+    confidence_a = db.Column(db.Float)
+    
+    source_b = db.Column(db.String(50))
+    value_b = db.Column(db.Text)
+    confidence_b = db.Column(db.Float)
+    
+    # Resolution
+    resolution_status = db.Column(db.String(50), default='pending')  # 'pending', 'resolved', 'escalated'
+    resolution_method = db.Column(db.String(100))  # How conflict was resolved
+    resolution_notes = db.Column(db.Text)
+    resolved_by = db.Column(db.String(100))
+    resolved_date = db.Column(db.DateTime)
+    
+    created_date = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Indexes
+    __table_args__ = (
+        db.Index('idx_study_conflicts', 'study_id', 'resolution_status'),
+        db.Index('idx_severity', 'severity'),
+    )
+
+# ==================== SOURCE ATTRIBUTION CONSTANTS ====================
+
+SOURCE_ICONS = {
+    'pdfplumber': '📊',  # Table/structured data
+    'ocr': '👁️',        # Visual/image extraction  
+    'llm': '🤖',        # AI interpretation
+    'heuristic': '🔍',  # Pattern matching
+    'calculated': '🧮', # Derived/calculated
+    'manual': '✏️',     # User input
+    'validated': '✅',  # User validated
+    'conflict': '⚠️',   # Conflicting sources
+    'missing': '❌',    # Not found
+    'uncertain': '❓'   # Low confidence
+}
+
+SOURCE_PRIORITY_DEFAULT = [
+    'pdfplumber',  # Structured table data (highest priority)
+    'heuristic',   # Pattern matching from text
+    'ocr',         # Visual extraction
+    'llm'          # AI interpretation (lowest priority for conflicts)
+]
+
+CONFIDENCE_THRESHOLDS = {
+    'high': 0.8,
+    'medium': 0.6,
+    'low': 0.4
+}
 
 # ==================== PDF EXTRACTION METHODS ====================
 
@@ -602,6 +765,10 @@ CRITICAL: Extract PRIMARY and SECONDARY OUTCOMES with ALL statistical details. T
 🎯 OUTCOME EXTRACTION REQUIREMENTS:
 1. PRIMARY OUTCOMES: Look for "primary endpoint", "primary outcome", "main outcome" - extract ALL statistics
 2. SECONDARY OUTCOMES: Look for "secondary endpoint", "secondary outcome", "additional outcomes" - extract EVERY ONE
+   - Common secondary outcomes include: diastolic BP, heart rate, adverse events, QoL, laboratory values
+   - Check EVERY results table (Table 2, Table 3, Table 4, etc.) for additional secondary outcomes
+   - Look for outcomes mentioned in methods but reported separately in results
+   - DO NOT LIMIT to just the first secondary outcome - extract ALL of them
 3. **MULTIPLE TIMEPOINTS**: Extract the SAME outcome measured at DIFFERENT times:
    - Short-term effects (immediate, 1-7 days)
    - Medium-term effects (1-12 weeks)  
@@ -617,6 +784,8 @@ CRITICAL: Extract PRIMARY and SECONDARY OUTCOMES with ALL statistical details. T
    - Patient-reported outcomes (quality of life, pain scores, functional scales)
    - Safety outcomes (adverse events, laboratory safety)
    - Composite endpoints (multiple outcomes combined)
+
+⚠️ CRITICAL: If you find mention of secondary outcomes but incomplete data, note: "Additional secondary outcomes mentioned but require manual extraction from [specific location]"
 
 🕐 TIMEPOINT EXTRACTION CRITICAL RULES:
 - Look for phrases: "at 1 week", "at 12 weeks", "at 6 months", "at end of treatment", "at follow-up"
@@ -883,132 +1052,33 @@ CLINICAL TRIAL TEXT:
 Extract now. MANDATORY: Every single data point must include its source location. Never write "NOT_SPECIFIED" - search harder or write "NOT_FOUND with exact source searched"."""
 
     def _create_focused_extraction_prompt(self, text: str, table_context: str, tables: List) -> str:
-        """Create focused prompt that prioritizes all outcome data and important tables for ANY clinical trial"""
+        """Ultra-compact prompt for efficient extraction - prioritizes tables"""
         
-        # Generic approach: Extract key sections from any clinical trial
-        key_sections = []
-        
-        # Priority 1: Find results/outcomes sections (universal for all trials)
-        results_sections = []
+        # Extract only the most critical sections
         lines = text.split('\n')
-        in_results = False
-        current_section = []
         
-        # Generic keywords that appear in any clinical trial
-        result_keywords = ['results', 'outcomes', 'endpoint', 'efficacy', 'safety', 'primary', 'secondary', 
-                          'findings', 'analysis', 'comparison', 'treatment', 'intervention']
+        # Get results sections (compact)
+        results = '\n'.join([l for l in lines if any(k in l.lower() for k in ['results', 'outcomes', 'table 2', 'table 3', 'endpoint', 'efficacy'])])[:15000]
         
-        for line in lines:
-            if any(keyword in line.lower() for keyword in result_keywords):
-                if current_section and in_results:
-                    results_sections.append('\n'.join(current_section))
-                current_section = [line]
-                in_results = True
-            elif in_results and current_section:
-                current_section.append(line)
-                if len('\n'.join(current_section)) > 8000:  # Limit section size
-                    results_sections.append('\n'.join(current_section))
-                    current_section = []
-                    in_results = False
+        # Get baseline (compact)
+        baseline = '\n'.join([l for l in lines[:400] if any(k in l.lower() for k in ['baseline', 'table 1', 'demographics', 'randomized', 'age', 'sex'])])[:5000]
         
-        if current_section and in_results:
-            results_sections.append('\n'.join(current_section))
+        # Get methods (compact)
+        methods = '\n'.join([l for l in lines[:600] if any(k in l.lower() for k in ['methods', 'design', 'participants', 'blinding', 'randomization'])])[:4000]
         
-        # Priority 2: Find baseline characteristics and demographics (CRITICAL for population data)
-        baseline_sections = []
-        baseline_keywords = ['baseline', 'demographics', 'characteristics', 'table 1', 'participant', 
-                           'enrollment', 'screened', 'randomized', 'age', 'male', 'female', 'consort']
+        # Prioritize table data - keep maximum amount
+        table_data = table_context[:35000] if table_context else ""
         
-        for line in lines[:200]:  # Search early in document for baseline info
-            if any(keyword in line.lower() for keyword in baseline_keywords):
-                baseline_sections.append(line)
+        focused = f"""METHODS: {methods}\nBASELINE: {baseline}\nRESULTS: {results}\nTABLES: {table_data}"""
         
-        baseline_text = '\n'.join(baseline_sections[:100])  # Preserve baseline data
-        
-        # Priority 3: Find statistical results with complete parameters
-        # Priority 3: Find statistical results with complete parameters
-        key_table_text = ""
-        if table_context:
-            table_lines = table_context.split('\n')
-            statistical_table_lines = []
-            
-            # Enhanced statistical keywords - prioritize complete data
-            stat_keywords = ['mean', 'sd', 'standard deviation', 'median', 'ci', 'confidence', 'interval', 'p-value', 'p value',
-                           'n=', 'total', 'group', 'arm', 'treatment', 'control', 'placebo', 'baseline',
-                           'change', 'difference', 'estimate', 'effect', 'outcome', 'endpoint', '%', 'percent',
-                           'screened', 'randomized', 'analyzed', 'enrolled', 'consort', 'age', 'male', 'female',
-                           'demographics', 'characteristics', '±', 'mm hg', 'systolic', 'diastolic']
-            
-            for line in table_lines:
-                if any(keyword in line.lower() for keyword in stat_keywords):
-                    statistical_table_lines.append(line)
-            
-            key_table_text = '\n'.join(statistical_table_lines[:400])  # Increased for more complete data
-        
-        # Priority 3: Extract methods and study design (universal for all trials)
-        methods_text = ""
-        design_keywords = ['abstract', 'background', 'methods', 'design', 'participants', 'interventions', 
-                          'randomized', 'trial', 'study', 'protocol', 'objective']
-        
-        for line in lines[:150]:  # Increased to capture more design info
-            if any(keyword in line.lower() for keyword in design_keywords):
-                methods_text += line + '\n'
-                if len(methods_text) > 4000:  # Increased limit
-                    break
-        
-        # Create focused content prioritizing BASELINE DATA and complete statistics
-        focused_text = f"""
-=== STUDY DESIGN & METHODS ===
-{methods_text[:6000]}
+        return f"""Extract clinical trial data. For every value add "Source: page X" or "Source: Table Y page Z".
 
-=== BASELINE CHARACTERISTICS & DEMOGRAPHICS ===
-{baseline_text[:8000]}
+Extract ALL arms, ALL outcomes (primary+secondary), ALL timepoints, ALL statistics (mean, SD, CI, p-value).
 
-=== RESULTS SECTIONS ===
-{(' '.join(results_sections))[:25000]}
+Return JSON: {{"study_identification":{{"title":"...-Source:p.X","authors":["..."],"year":"YYYY","doi":"...","trial_registration":"..."}}, "study_design":{{"type":"...-Source:p.X","blinding":"...","randomization_method":"...","duration_total":"..."}}, "interventions":[{{"arm_name":"...-Source:p.X","n_randomized":"N-Source:TableX p.Y","n_analyzed":"N-Source:TableX p.Y","dose":"...","frequency":"..."}}], "outcomes":{{"primary":[{{"outcome_name":"...-Source:p.X","timepoint":"X weeks-Source:p.Y","results_by_arm":[{{"arm":"match intervention name","n":"N-Source:TblX p.Y","mean":"value-Source:TblX p.Y","sd":"value-Source:TblX p.Y","ci_95_lower":"value","ci_95_upper":"value"}}],"between_group_comparison":{{"effect_measure":"type","effect_estimate":"value-Source:TblX p.Y","ci_95_lower":"value","ci_95_upper":"value","p_value":"value-Source:TblX p.Y"}}}}],"secondary":[{{"outcome_name":"...-Source:p.X","timepoint":"X weeks","results_by_arm":[{{"arm":"...","n":"N","mean":"value","sd":"value"}}],"between_group_comparison":{{"effect_measure":"...","effect_estimate":"...","ci_95_lower":"...","ci_95_upper":"...","p_value":"..."}}}}]}}}}
 
-=== COMPLETE STATISTICAL DATA TABLES ===
-{key_table_text[:20000]}
-
-=== ADDITIONAL METHODS & RESULTS ===
-{text[20000:45000] if len(text) > 45000 else text[20000:]}
-"""
-        
-        return f"""You are an expert clinical trial data extractor. Extract ALL statistical data with MANDATORY source citations.
-
-🎯 UNIVERSAL CLINICAL TRIAL EXTRACTION:
-Extract data from ANY type of clinical trial. Focus on finding ALL statistical values, outcomes, and treatment comparisons.
-
-CRITICAL INSTRUCTIONS:
-1. Extract ALL primary and secondary outcomes with complete statistical data
-2. Find ALL intervention arms with sample sizes and results
-3. Extract ALL means, standard deviations, confidence intervals, p-values, effect estimates
-4. Look for ANY type of endpoint: clinical, laboratory, patient-reported, safety, efficacy
-5. Extract baseline characteristics and demographics for ALL arms
-6. Find ALL between-group comparisons and statistical tests
-7. **MULTIPLE TIMEPOINTS**: Extract the SAME outcome at DIFFERENT measurement times:
-   - Primary analysis timepoint (main endpoint timing)
-   - Secondary analysis timepoints (earlier/later measurements)
-   - Interim analyses (planned looks during study)
-   - Follow-up timepoints (post-treatment assessments)
-   - Post-hoc timepoint analyses
-
-🕐 TIMEPOINT DETECTION:
-- Look for: "at week X", "at month Y", "at day Z", "at end of treatment", "at follow-up"
-- Find time-based tables and figures with multiple measurement points
-- Identify which timepoint is primary endpoint vs secondary timepoints
-- Extract data from survival curves at multiple time cuts (if applicable)
-
-For EVERY data point extracted, specify exact source: "Source: Table X on page Y" or "Source: page Z"
-
-NEVER write "NOT_SPECIFIED" - search for the actual values in tables and text.
-
-Return JSON with this complete structure:
-{{
-  "study_identification": {{
-    "title": "complete title - Source: page X",
-    "authors": ["all authors - Source: page X"],
-    "journal": "journal name - Source: page X",
+CONTENT:
+{focused},
     "year": "YYYY - Source: page X",
     "doi": "DOI - Source: page X",
     "trial_registration": "registration number - Source: page X"
@@ -1240,6 +1310,11 @@ class EnsembleExtractor:
         heuristic_demographics = self.heuristic_extractor.extract_demographics(pdf_data['text'])
         heuristic_data = {**heuristic_stats, 'demographics': heuristic_demographics}
         
+        # Store for later access by multi-source storage
+        self._last_llm_data = llm_data
+        self._last_heuristic_data = heuristic_data
+        self._last_pdf_data = pdf_data
+        
         # Step 4: Ensemble and validation - NOW ACTUALLY USES ALL DATA
         final_data = self._ensemble_results(llm_data, heuristic_data, pdf_data)
         
@@ -1275,6 +1350,26 @@ class EnsembleExtractor:
                 'demographics_extraction': bool(heuristic_demographics)
             }
         }
+        
+        return final_data, metadata
+    
+    def extract_comprehensive_with_sources(self, pdf_path: str, study_id: int = None) -> Tuple[Dict, Dict]:
+        """Enhanced extraction that stores multi-source data"""
+        final_data, metadata = self.extract_comprehensive(pdf_path)
+        
+        # Store multi-source data if study_id is provided
+        if study_id:
+            try:
+                # Get individual source data for storage
+                pdf_data = self.pdf_extractor.comprehensive_extract() if self.pdf_extractor else {}
+                llm_data = getattr(self, '_last_llm_data', {})
+                heuristic_data = getattr(self, '_last_heuristic_data', {})
+                ocr_text = pdf_data.get('ocr_text', '')
+                
+                self.store_multi_source_data(study_id, llm_data, heuristic_data, pdf_data, ocr_text)
+            except Exception as e:
+                print(f"Warning: Could not store multi-source data: {e}")
+                metadata['multi_source_storage_error'] = str(e)
         
         return final_data, metadata
     
@@ -1331,7 +1426,368 @@ class EnsembleExtractor:
                     ensembled['participants'] = {}
                 ensembled['participants'].update(table_flow)
         
+        # CRITICAL: Post-process and complete missing data
+        ensembled = self._complete_missing_data(ensembled, pdf_data)
+        
         return ensembled
+    
+    def store_multi_source_data(self, study_id: int, llm_data: Dict, heuristic_data: Dict, 
+                               pdf_data: Dict, ocr_text: str = None) -> None:
+        """Store extraction data from each source in the database"""
+        import time
+        start_time = time.time()
+        
+        # Store raw extraction sources
+        sources_to_store = [
+            ('llm', llm_data, 0.8, {'model': 'gpt-4', 'tokens_used': getattr(self.llm_extractor, 'tokens_used', 0)}),
+            ('heuristic', heuristic_data, 0.7, {'patterns_matched': len(heuristic_data) if heuristic_data else 0}),
+            ('pdfplumber', {'tables': pdf_data.get('tables', []), 'text_length': len(pdf_data.get('text', ''))}, 
+             0.9, {'tables_found': len(pdf_data.get('tables', [])), 'pages': pdf_data.get('page_count', 0)})
+        ]
+        
+        if ocr_text:
+            sources_to_store.append(('ocr', {'text': ocr_text, 'text_length': len(ocr_text)}, 
+                                   0.6, {'text_extracted': bool(ocr_text)}))
+        
+        # Store each source's raw data
+        for method, raw_data, confidence, quality_metrics in sources_to_store:
+            extraction_source = ExtractionSource(
+                study_id=study_id,
+                extraction_method=method,
+                source_version='1.0',
+                raw_data=raw_data,
+                confidence_score=confidence,
+                quality_metrics=quality_metrics,
+                processing_time=time.time() - start_time,
+                success_status=True
+            )
+            db.session.add(extraction_source)
+        
+        # Store individual data elements with source attribution
+        self._store_data_elements(study_id, llm_data, heuristic_data, pdf_data, ocr_text)
+        
+        # Detect and store conflicts
+        self._detect_and_store_conflicts(study_id)
+        
+        try:
+            db.session.commit()
+        except Exception as e:
+            print(f"Warning: Could not store multi-source data: {e}")
+            db.session.rollback()
+    
+    def _store_data_elements(self, study_id: int, llm_data: Dict, heuristic_data: Dict, 
+                            pdf_data: Dict, ocr_text: str = None) -> None:
+        """Store individual data elements with source attribution"""
+        
+        # Extract values from each source for key fields
+        key_fields = [
+            ('study_identification.title', 'identification'),
+            ('study_identification.authors', 'identification'),
+            ('study_identification.year', 'identification'),
+            ('study_design.type', 'design'),
+            ('study_design.blinding', 'design'),
+            ('population.total_randomized', 'population'),
+            ('population.total_screened', 'population'),
+            ('population.total_analyzed', 'population')
+        ]
+        
+        for field_path, element_type in key_fields:
+            element_name = field_path.split('.')[-1]
+            
+            # Extract values from each source
+            llm_value = self._extract_field_value(llm_data, field_path)
+            heuristic_value = self._extract_field_value(heuristic_data, field_path)
+            pdf_value = self._extract_field_value(pdf_data, field_path)
+            ocr_value = None  # OCR doesn't typically extract structured data
+            
+            # Calculate confidence scores
+            llm_confidence = 0.8 if llm_value else 0.0
+            heuristic_confidence = 0.7 if heuristic_value else 0.0
+            pdf_confidence = 0.9 if pdf_value else 0.0
+            ocr_confidence = 0.0
+            
+            # Determine source locations
+            llm_location = "AI interpretation"
+            heuristic_location = "Pattern matching"
+            pdf_location = self._find_pdf_source_location(pdf_data, field_path)
+            ocr_location = "Not found"
+            
+            # Check if any sources have values
+            if any([llm_value, heuristic_value, pdf_value]):
+                # Detect conflicts
+                sources_with_values = [
+                    ('llm', llm_value),
+                    ('heuristic', heuristic_value), 
+                    ('pdfplumber', pdf_value)
+                ]
+                sources_with_values = [(source, value) for source, value in sources_with_values if value]
+                
+                conflicting = len(set(str(value) for _, value in sources_with_values)) > 1
+                
+                data_element = DataElement(
+                    study_id=study_id,
+                    element_type=element_type,
+                    element_name=element_name,
+                    element_path=field_path,
+                    llm_value=str(llm_value) if llm_value else None,
+                    llm_confidence=llm_confidence,
+                    llm_source_location=llm_location,
+                    heuristic_value=str(heuristic_value) if heuristic_value else None,
+                    heuristic_confidence=heuristic_confidence,
+                    heuristic_source_location=heuristic_location,
+                    pdfplumber_value=str(pdf_value) if pdf_value else None,
+                    pdfplumber_confidence=pdf_confidence,
+                    pdfplumber_source_location=pdf_location,
+                    ocr_value=str(ocr_value) if ocr_value else None,
+                    ocr_confidence=ocr_confidence,
+                    ocr_source_location=ocr_location,
+                    conflicting_sources=conflicting,
+                    needs_review=conflicting or len(sources_with_values) == 1  # Review if conflicting or only one source
+                )
+                
+                db.session.add(data_element)
+    
+    def _extract_field_value(self, data: Dict, field_path: str):
+        """Extract a field value from nested data using dot notation"""
+        if not data:
+            return None
+        
+        parts = field_path.split('.')
+        current = data
+        
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None
+        
+        return current if current not in ['NOT_REPORTED', 'NOT_SPECIFIED', None, ''] else None
+    
+    def _find_pdf_source_location(self, pdf_data: Dict, field_path: str) -> str:
+        """Find the source location in PDF for a field"""
+        # This is a simplified implementation - in practice, you'd track this during extraction
+        if pdf_data.get('tables') and 'population' in field_path:
+            return f"Table data (found {len(pdf_data['tables'])} tables)"
+        elif pdf_data.get('text'):
+            return "PDF text extraction"
+        else:
+            return "PDF source unknown"
+    
+    def _detect_and_store_conflicts(self, study_id: int) -> None:
+        """Detect and store conflicts between extraction sources"""
+        conflicting_elements = DataElement.query.filter_by(
+            study_id=study_id, 
+            conflicting_sources=True
+        ).all()
+        
+        for element in conflicting_elements:
+            # Find the conflicting sources
+            sources = [
+                ('llm', element.llm_value, element.llm_confidence),
+                ('heuristic', element.heuristic_value, element.heuristic_confidence),
+                ('pdfplumber', element.pdfplumber_value, element.pdfplumber_confidence),
+                ('ocr', element.ocr_value, element.ocr_confidence)
+            ]
+            
+            sources_with_values = [(s, v, c) for s, v, c in sources if v]
+            
+            if len(sources_with_values) >= 2:
+                # Create conflict record for the highest confidence conflicting pair
+                sources_with_values.sort(key=lambda x: x[2], reverse=True)
+                source_a, value_a, conf_a = sources_with_values[0]
+                source_b, value_b, conf_b = sources_with_values[1]
+                
+                if str(value_a) != str(value_b):
+                    conflict = ExtractionConflict(
+                        study_id=study_id,
+                        data_element_id=element.id,
+                        conflict_type='value_mismatch',
+                        severity='medium',
+                        source_a=source_a,
+                        value_a=str(value_a),
+                        confidence_a=conf_a,
+                        source_b=source_b,
+                        value_b=str(value_b),
+                        confidence_b=conf_b
+                    )
+                    db.session.add(conflict)
+    
+    def _complete_missing_data(self, data: Dict, pdf_data: Dict) -> Dict:
+        """Complete missing data by calculating totals and extracting from tables"""
+        
+        # 1. Calculate total participant flow from individual arms if missing
+        if data.get('interventions') and data.get('participants'):
+            participants = data['participants']
+            interventions = data['interventions']
+            
+            # Calculate total randomized if missing
+            if not participants.get('total_randomized'):
+                total_randomized = 0
+                randomized_values = []
+                
+                for arm in interventions:
+                    if arm.get('n_randomized'):
+                        # Enhanced number extraction
+                        n_val = self._extract_number_from_string(arm.get('n_randomized'))
+                        if n_val > 0:
+                            randomized_values.append(n_val)
+                            total_randomized += n_val
+                
+                if total_randomized > 0:
+                    participants['total_randomized'] = total_randomized
+                    participants['randomized_source'] = f'calculated_from_arms ({"+".join(map(str, randomized_values))})'
+                    print(f"📊 Calculated total randomized: {total_randomized} from arms: {randomized_values}")
+            
+            # Calculate total analyzed if missing
+            if not participants.get('total_analyzed'):
+                total_analyzed = 0
+                analyzed_values = []
+                
+                for arm in interventions:
+                    if arm.get('n_analyzed'):
+                        # Enhanced number extraction
+                        n_val = self._extract_number_from_string(arm.get('n_analyzed'))
+                        if n_val > 0:
+                            analyzed_values.append(n_val)
+                            total_analyzed += n_val
+                
+                if total_analyzed > 0:
+                    participants['total_analyzed'] = total_analyzed
+                    participants['analyzed_source'] = f'calculated_from_arms ({"+".join(map(str, analyzed_values))})'
+                    print(f"📊 Calculated total analyzed: {total_analyzed} from arms: {analyzed_values}")
+        
+        # 2. Extract missing standard deviations from tables
+        if data.get('outcomes') and pdf_data.get('tables'):
+            self._extract_missing_sds_from_tables(data['outcomes'], pdf_data['tables'])
+        
+        # 3. Validate and fix demographics
+        if data.get('participants'):
+            self._validate_demographics(data['participants'])
+        
+        # 4. Ensure all secondary outcomes are captured
+        if data.get('outcomes') and pdf_data.get('tables'):
+            self._extract_additional_secondary_outcomes(data['outcomes'], pdf_data['tables'])
+        
+        return data
+    
+    def _extract_number_from_string(self, value) -> int:
+        """Extract number from strings like '264 patients', '266', 'NA', etc."""
+        if not value or value in ['NA', 'N/A', 'NOT_REPORTED', 'NOT_SPECIFIED']:
+            return 0
+        
+        # Convert to string and clean
+        str_val = str(value).lower()
+        
+        # Remove common words and punctuation
+        str_val = str_val.replace('patients', '').replace('subjects', '').replace('participants', '')
+        str_val = str_val.replace(',', '').replace(' ', '').replace('n=', '')
+        
+        # Extract first number found
+        import re
+        numbers = re.findall(r'\d+', str_val)
+        if numbers:
+            return int(numbers[0])
+        
+        return 0
+    
+    def _extract_missing_sds_from_tables(self, outcomes: Dict, tables: List[Dict]):
+        """Extract missing standard deviations from tables"""
+        for outcome_type in ['primary', 'secondary']:
+            if outcome_type not in outcomes:
+                continue
+                
+            for outcome in outcomes[outcome_type]:
+                if not outcome.get('timepoints'):
+                    continue
+                    
+                for timepoint in outcome['timepoints']:
+                    if not timepoint.get('results_by_arm'):
+                        continue
+                        
+                    for arm_result in timepoint['results_by_arm']:
+                        # If SD is missing but mean exists, try to find it in tables
+                        if arm_result.get('mean') and not arm_result.get('sd'):
+                            sd_value = self._find_sd_in_tables(arm_result.get('arm'), outcome.get('outcome_name'), tables)
+                            if sd_value:
+                                arm_result['sd'] = sd_value
+                                arm_result['sd_source'] = 'table_extraction'
+    
+    def _find_sd_in_tables(self, arm_name: str, outcome_name: str, tables: List[Dict]) -> str:
+        """Find standard deviation for specific arm and outcome in tables"""
+        for table in tables:
+            if not table.get('data'):
+                continue
+                
+            table_text = str(table['data']).lower()
+            
+            # Look for patterns like "mean (SD)" or "mean ± SD"
+            if arm_name and arm_name.lower() in table_text:
+                # Common SD patterns
+                sd_patterns = [
+                    r'(\d+\.?\d*)\s*\(\s*(\d+\.?\d*)\s*\)',  # mean (sd)
+                    r'(\d+\.?\d*)\s*±\s*(\d+\.?\d*)',        # mean ± sd
+                    r'(\d+\.?\d*)\s*\+/-\s*(\d+\.?\d*)',     # mean +/- sd
+                ]
+                
+                for pattern in sd_patterns:
+                    matches = re.findall(pattern, table_text)
+                    if matches:
+                        # Return the SD part (second group)
+                        return matches[0][1] if len(matches[0]) > 1 else None
+        return None
+    
+    def _validate_demographics(self, participants: Dict):
+        """Validate and fix unrealistic demographic values"""
+        # Fix unrealistic age values
+        if participants.get('age_mean'):
+            age = float(participants['age_mean'])
+            if age > 120 or age < 18:  # Unrealistic age
+                # Try to find correct age in other sources
+                participants['age_mean_error'] = f"Unrealistic age: {age}"
+                # Could implement additional logic to find correct age
+        
+        # Validate gender percentages
+        if participants.get('sex_male_percent'):
+            male_pct = float(participants['sex_male_percent'])
+            if male_pct > 100 or male_pct < 0:
+                participants['sex_male_percent_error'] = f"Invalid percentage: {male_pct}"
+    
+    def _extract_additional_secondary_outcomes(self, outcomes: Dict, tables: List[Dict]):
+        """Extract additional secondary outcomes that might have been missed"""
+        # Look for common secondary outcomes in tables
+        secondary_patterns = [
+            'diastolic', 'dbp', 'diastolic blood pressure',
+            'heart rate', 'pulse', 'adverse events',
+            'quality of life', 'qol', 'side effects'
+        ]
+        
+        for table in tables:
+            if not table.get('data'):
+                continue
+                
+            table_text = str(table['data']).lower()
+            
+            # Check if this table contains secondary outcome data
+            for pattern in secondary_patterns:
+                if pattern in table_text:
+                    # This table likely contains secondary outcome data
+                    # Add metadata about potential missing secondary outcomes
+                    if 'secondary' not in outcomes:
+                        outcomes['secondary'] = []
+                    
+                    # Add a placeholder for potentially missed secondary outcomes
+                    found_pattern = {
+                        'outcome_name': f'Potential secondary outcome: {pattern}',
+                        'outcome_type': 'continuous',
+                        'extraction_note': f'Found in table but not fully extracted: {pattern}',
+                        'table_source': f"Table {table.get('page', 'unknown')}",
+                        'requires_manual_review': True
+                    }
+                    
+                    # Only add if not already present
+                    if not any(outcome.get('outcome_name', '').lower().find(pattern) >= 0 
+                             for outcome in outcomes['secondary']):
+                        outcomes['secondary'].append(found_pattern)
     
     def _enhance_outcomes_with_heuristics(self, outcomes: Dict, heuristic_data: Dict):
         """Add statistical values from heuristic extraction to outcomes"""
@@ -1576,7 +2032,7 @@ class EnsembleExtractor:
 # ==================== API ROUTES ====================
 @app.route('/')
 def index():
-    """Serve the frontend"""
+    """Serve the original frontend for testing"""
     return render_template('index.html')
 
 @app.route('/health', methods=['GET'])
@@ -1637,14 +2093,81 @@ def extract_trial_data():
         # Save to database WITH PDF blob
         study = _save_to_database(extracted_data, metadata, file_hash, file_content, file.filename)
         
+        # Store multi-source data for the saved study
+        try:
+            # Check if attributes exist before accessing them
+            llm_data = getattr(extractor, '_last_llm_data', {})
+            heuristic_data = getattr(extractor, '_last_heuristic_data', {})
+            pdf_data = getattr(extractor, '_last_pdf_data', {})
+            
+            if llm_data or heuristic_data or pdf_data:
+                extractor.store_multi_source_data(
+                    study.id, 
+                    llm_data, 
+                    heuristic_data, 
+                    pdf_data,
+                    pdf_data.get('ocr_text', '')
+                )
+                metadata['multi_source_storage'] = 'success'
+            else:
+                metadata['multi_source_storage'] = 'skipped_no_data'
+        except Exception as e:
+            print(f"Warning: Could not store multi-source data: {e}")
+            import traceback
+            traceback.print_exc()
+            metadata['multi_source_storage_error'] = str(e)
+        
         # Clean up temp file
         os.unlink(filepath)
+        
+        # Get source data for the frontend
+        sources_data = {}
+        try:
+            llm_data = getattr(extractor, '_last_llm_data', {})
+            heuristic_data = getattr(extractor, '_last_heuristic_data', {})
+            pdf_data = getattr(extractor, '_last_pdf_data', {})
+            
+            sources_data = {
+                'llm': {
+                    'data': llm_data,
+                    'confidence': 0.8,
+                    'icon': '🤖',
+                    'available': bool(llm_data)
+                },
+                'heuristic': {
+                    'data': heuristic_data,
+                    'confidence': 0.7,
+                    'icon': '🔍',
+                    'available': bool(heuristic_data)
+                },
+                'pdfplumber': {
+                    'data': {
+                        'tables': pdf_data.get('tables', []),
+                        'text_length': len(pdf_data.get('text', ''))
+                    },
+                    'confidence': 0.9,
+                    'icon': '📊',
+                    'available': bool(pdf_data)
+                },
+                'ocr': {
+                    'data': {
+                        'text_length': len(pdf_data.get('ocr_text', ''))
+                    },
+                    'confidence': 0.6,
+                    'icon': '👁️',
+                    'available': bool(pdf_data.get('ocr_text', ''))
+                }
+            }
+        except Exception as e:
+            print(f"Warning: Could not prepare source data: {e}")
+            sources_data = {'error': 'Could not prepare source data'}
         
         return jsonify({
             'success': True,
             'study_id': study.id,
             'data': extracted_data,
-            'metadata': metadata
+            'metadata': metadata,
+            'sources': sources_data  # NEW: Include source data for frontend
         })
         
     except Exception as e:
@@ -1872,13 +2395,299 @@ def get_study_sources(study_id):
     
     return jsonify(sources_analysis)
 
+# ==================== NEW MULTI-SOURCE DATA ENDPOINTS ====================
+
+@app.route('/api/studies/<int:study_id>/sources/detailed', methods=['GET'])
+def get_detailed_sources(study_id):
+    """Get detailed source-specific extraction data"""
+    study = Study.query.get_or_404(study_id)
+    
+    # Get all extraction sources for this study
+    sources = ExtractionSource.query.filter_by(study_id=study_id).all()
+    
+    sources_data = {}
+    for source in sources:
+        sources_data[source.extraction_method] = {
+            'raw_data': source.raw_data,
+            'confidence_score': source.confidence_score,
+            'quality_metrics': source.quality_metrics,
+            'processing_time': source.processing_time,
+            'extraction_timestamp': source.extraction_timestamp.isoformat() if source.extraction_timestamp else None,
+            'success_status': source.success_status,
+            'error_messages': source.error_messages
+        }
+    
+    return jsonify({
+        'study_id': study_id,
+        'sources': sources_data,
+        'total_sources': len(sources)
+    })
+
+@app.route('/api/studies/<int:study_id>/data-elements', methods=['GET'])
+def get_data_elements(study_id):
+    """Get individual data elements with source attribution"""
+    study = Study.query.get_or_404(study_id)
+    
+    data_elements = DataElement.query.filter_by(study_id=study_id).all()
+    
+    elements_by_type = {}
+    conflicts = []
+    
+    for element in data_elements:
+        if element.element_type not in elements_by_type:
+            elements_by_type[element.element_type] = []
+        
+        element_data = {
+            'id': element.id,
+            'element_name': element.element_name,
+            'element_path': element.element_path,
+            'sources': {
+                'pdfplumber': {
+                    'value': element.pdfplumber_value,
+                    'confidence': element.pdfplumber_confidence,
+                    'location': element.pdfplumber_source_location
+                },
+                'ocr': {
+                    'value': element.ocr_value,
+                    'confidence': element.ocr_confidence,
+                    'location': element.ocr_source_location
+                },
+                'llm': {
+                    'value': element.llm_value,
+                    'confidence': element.llm_confidence,
+                    'location': element.llm_source_location
+                },
+                'heuristic': {
+                    'value': element.heuristic_value,
+                    'confidence': element.heuristic_confidence,
+                    'location': element.heuristic_source_location
+                }
+            },
+            'selected_source': element.selected_source,
+            'selected_value': element.selected_value,
+            'user_notes': element.user_notes,
+            'is_validated': element.is_validated,
+            'needs_review': element.needs_review,
+            'conflicting_sources': element.conflicting_sources
+        }
+        
+        elements_by_type[element.element_type].append(element_data)
+        
+        if element.conflicting_sources:
+            conflicts.append(element_data)
+    
+    return jsonify({
+        'study_id': study_id,
+        'elements_by_type': elements_by_type,
+        'total_elements': len(data_elements),
+        'conflicts': conflicts,
+        'conflict_count': len(conflicts)
+    })
+
+@app.route('/api/studies/<int:study_id>/data-elements/<int:element_id>/select', methods=['POST'])
+def select_data_source(study_id, element_id):
+    """Set user selection for a data element"""
+    data = request.get_json()
+    
+    if not data or 'source' not in data or 'value' not in data:
+        return jsonify({'error': 'Missing source or value'}), 400
+    
+    element = DataElement.query.filter_by(id=element_id, study_id=study_id).first_or_404()
+    
+    element.selected_source = data['source']
+    element.selected_value = data['value']
+    element.user_notes = data.get('notes', '')
+    element.selection_timestamp = datetime.utcnow()
+    element.is_validated = True
+    element.needs_review = False
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'element_id': element_id,
+        'selected_source': element.selected_source,
+        'selected_value': element.selected_value
+    })
+
+@app.route('/api/studies/<int:study_id>/auto-select', methods=['POST'])
+def auto_select_recommended(study_id):
+    """Auto-select recommended sources based on confidence and priority"""
+    data = request.get_json()
+    confidence_threshold = data.get('confidence_threshold', 0.7) if data else 0.7
+    
+    elements = DataElement.query.filter_by(study_id=study_id).all()
+    selections_made = 0
+    
+    for element in elements:
+        if element.is_validated:
+            continue  # Skip already validated elements
+        
+        # Get all source values with confidence
+        sources = [
+            ('pdfplumber', element.pdfplumber_value, element.pdfplumber_confidence or 0),
+            ('heuristic', element.heuristic_value, element.heuristic_confidence or 0),
+            ('ocr', element.ocr_value, element.ocr_confidence or 0),
+            ('llm', element.llm_value, element.llm_confidence or 0)
+        ]
+        
+        # Filter out None/empty values and sort by priority and confidence
+        valid_sources = [(s, v, c) for s, v, c in sources if v and c >= confidence_threshold]
+        
+        if not valid_sources:
+            continue
+        
+        # Sort by priority (based on SOURCE_PRIORITY_DEFAULT) and confidence
+        priority_map = {source: i for i, source in enumerate(SOURCE_PRIORITY_DEFAULT)}
+        valid_sources.sort(key=lambda x: (priority_map.get(x[0], 99), -x[2]))
+        
+        # Select the best source
+        best_source, best_value, best_confidence = valid_sources[0]
+        
+        element.selected_source = best_source
+        element.selected_value = best_value
+        element.selection_timestamp = datetime.utcnow()
+        element.is_validated = True
+        element.needs_review = False
+        
+        selections_made += 1
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'selections_made': selections_made,
+        'confidence_threshold': confidence_threshold
+    })
+
+@app.route('/api/studies/<int:study_id>/conflicts', methods=['GET'])
+def get_extraction_conflicts(study_id):
+    """Get all extraction conflicts for a study"""
+    conflicts = ExtractionConflict.query.filter_by(study_id=study_id).all()
+    
+    conflicts_data = []
+    for conflict in conflicts:
+        conflicts_data.append({
+            'id': conflict.id,
+            'data_element_id': conflict.data_element_id,
+            'conflict_type': conflict.conflict_type,
+            'severity': conflict.severity,
+            'source_a': conflict.source_a,
+            'value_a': conflict.value_a,
+            'confidence_a': conflict.confidence_a,
+            'source_b': conflict.source_b,
+            'value_b': conflict.value_b,
+            'confidence_b': conflict.confidence_b,
+            'resolution_status': conflict.resolution_status,
+            'resolution_method': conflict.resolution_method,
+            'resolution_notes': conflict.resolution_notes,
+            'created_date': conflict.created_date.isoformat() if conflict.created_date else None
+        })
+    
+    return jsonify({
+        'study_id': study_id,
+        'conflicts': conflicts_data,
+        'total_conflicts': len(conflicts_data),
+        'pending_conflicts': len([c for c in conflicts_data if c['resolution_status'] == 'pending'])
+    })
+
+@app.route('/api/studies/<int:study_id>/finalize', methods=['POST'])
+def finalize_study_selections(study_id):
+    """Finalize all user selections and generate final extraction data"""
+    study = Study.query.get_or_404(study_id)
+    
+    # Get all validated data elements
+    elements = DataElement.query.filter_by(study_id=study_id, is_validated=True).all()
+    
+    # Rebuild the study data using selected sources
+    final_data = _rebuild_study_from_selections(study, elements)
+    
+    # Update the study record
+    study.extraction_metadata = study.extraction_metadata or {}
+    study.extraction_metadata['finalized'] = True
+    study.extraction_metadata['finalization_timestamp'] = datetime.utcnow().isoformat()
+    study.extraction_metadata['validated_elements'] = len(elements)
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'study_id': study_id,
+        'finalized_data': final_data,
+        'validated_elements': len(elements)
+    })
+
+def _rebuild_study_from_selections(study, elements):
+    """Rebuild study data structure from user-selected sources"""
+    final_data = {
+        'study_identification': {},
+        'study_design': {},
+        'population': {},
+        'interventions': [],
+        'outcomes': {'primary': [], 'secondary': []}
+    }
+    
+    # Group elements by type and rebuild data structure
+    for element in elements:
+        if element.selected_value:
+            # Parse element path and set value in final_data structure
+            path_parts = element.element_path.split('.') if element.element_path else [element.element_name]
+            _set_nested_value(final_data, path_parts, element.selected_value)
+    
+    return final_data
+
+def _set_nested_value(data_dict, path_parts, value):
+    """Set a value in a nested dictionary using a path"""
+    current = data_dict
+    for part in path_parts[:-1]:
+        if part not in current:
+            current[part] = {}
+        current = current[part]
+    current[path_parts[-1]] = value
+
 @app.route('/api/studies/<int:study_id>', methods=['DELETE'])
 def delete_study(study_id):
-    """Delete a study"""
-    study = Study.query.get_or_404(study_id)
-    db.session.delete(study)
-    db.session.commit()
-    return jsonify({'success': True})
+    """Delete a study and all related records"""
+    print(f"\n{'='*60}")
+    print(f"🗑️  DELETE REQUEST RECEIVED for study_id={study_id}")
+    print(f"{'='*60}\n")
+    
+    try:
+        study = Study.query.get_or_404(study_id)
+        print(f"✓ Found study: {study.title[:50] if study.title else 'No title'}...")
+        
+        # Delete related records first to avoid foreign key constraint violations
+        print("\n🧹 Cleaning up related records...")
+        
+        # Delete multi-source extraction data
+        count = ExtractionSource.query.filter_by(study_id=study_id).delete()
+        print(f"  - Deleted {count} ExtractionSource records")
+        
+        count = DataElement.query.filter_by(study_id=study_id).delete()
+        print(f"  - Deleted {count} DataElement records")
+        
+        count = ExtractionConflict.query.filter_by(study_id=study_id).delete()
+        print(f"  - Deleted {count} ExtractionConflict records")
+        
+        # Delete outcome timepoints (not automatically cascaded from Study)
+        count = OutcomeTimepoint.query.filter_by(study_id=study_id).delete()
+        print(f"  - Deleted {count} OutcomeTimepoint records")
+        
+        # Now delete the study (this will cascade to interventions, outcomes, subgroups, adverse_events)
+        print(f"\n🗑️  Deleting study record...")
+        db.session.delete(study)
+        
+        db.session.commit()
+        print(f"\n✅ Study {study_id} deleted successfully!\n")
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"\n❌ DELETE FAILED: {e}\n")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/export/<int:study_id>', methods=['GET'])
 def export_study(study_id):
@@ -2404,90 +3213,165 @@ def export_csv(study_id):
                 })
             pd.DataFrame(int_data).to_excel(writer, sheet_name='Interventions', index=False)
         
-        # Sheet 4: Primary Outcomes (Full Statistical Detail)
+        # Sheet 4: Primary Outcomes (Full Statistical Detail) - ONE ROW PER ARM
         primary_outcomes = [o for o in study.outcomes if o.outcome_type == 'primary']
         if primary_outcomes:
             outcome_rows = []
+            seen_outcomes = set()  # Track processed outcomes to avoid duplicates
+            
             for outcome in primary_outcomes:
-                # Base outcome info
-                base_info = {
-                    'Outcome_Name': outcome.outcome_name,
-                    'Timepoint': outcome.timepoint
-                }
+                # Skip if outcome name is empty, placeholder, or already processed
+                if not outcome.outcome_name:
+                    continue
+                if outcome.outcome_name.startswith('Potential'):
+                    continue
+                if outcome.outcome_name in seen_outcomes:
+                    continue
+                seen_outcomes.add(outcome.outcome_name)
                 
-                # Add effect estimates if available
-                if outcome.effect_estimate:
-                    effect = outcome.effect_estimate
-                    base_info.update({
-                        'Effect_Type': effect.get('effect_measure') or effect.get('type'),
-                        'Effect_Estimate': effect.get('effect_estimate') or effect.get('value'),
-                        'CI_95_Lower': effect.get('ci_95_lower') or effect.get('ci_lower'),
-                        'CI_95_Upper': effect.get('ci_95_upper') or effect.get('ci_upper'),
-                        'P_Value': effect.get('p_value'),
-                        'Statistical_Test': effect.get('statistical_test')
-                    })
+                # Get timepoint info
+                timepoint_str = outcome.planned_timepoints or "Not specified"
+                if outcome.timepoints:
+                    primary_tp = next((tp for tp in outcome.timepoints if tp.timepoint_type == 'primary'), outcome.timepoints[0])
+                    timepoint_str = f"{primary_tp.timepoint_value} {primary_tp.timepoint_unit}" if primary_tp else timepoint_str
                 
-                # Add results by arm
-                if outcome.results_by_arm:
-                    for arm_result in outcome.results_by_arm:
-                        row = base_info.copy()
-                        row.update({
-                            'Arm': arm_result.get('arm'),
-                            'N_Analyzed': arm_result.get('n'),
-                            'Mean': arm_result.get('mean'),
-                            'SD': arm_result.get('sd'),
-                            'SE': arm_result.get('se'),
-                            'Median': arm_result.get('median'),
-                            'Q1': arm_result.get('q1'),
-                            'Q3': arm_result.get('q3'),
-                            'IQR': arm_result.get('iqr'),
-                            'Min': arm_result.get('min'),
-                            'Max': arm_result.get('max'),
-                            'Events': arm_result.get('events'),
-                            'Total': arm_result.get('total'),
-                            'Percent': arm_result.get('percent')
-                        })
+                # Get arm-by-arm results from additional_data JSON field
+                results_by_arm = []
+                if outcome.additional_data:
+                    # Check timepoints array first
+                    timepoints_data = outcome.additional_data.get('timepoints', [])
+                    if timepoints_data:
+                        for tp in timepoints_data:
+                            if tp.get('results_by_arm'):
+                                results_by_arm = tp.get('results_by_arm', [])
+                                break
+                    # Fallback to direct results_by_arm
+                    if not results_by_arm:
+                        results_by_arm = outcome.additional_data.get('results_by_arm', [])
+                
+                # Get between-group comparison if available
+                comparison_data = {}
+                if outcome.additional_data:
+                    timepoints_data = outcome.additional_data.get('timepoints', [])
+                    if timepoints_data:
+                        comparison_data = timepoints_data[0].get('between_group_comparison', {})
+                    if not comparison_data:
+                        comparison_data = outcome.additional_data.get('between_group_comparison', {})
+                
+                # Create row for each arm
+                if results_by_arm:
+                    for arm_data in results_by_arm:
+                        row = {
+                            'Outcome_Name': outcome.outcome_name,
+                            'Timepoint': timepoint_str,
+                            'Arm': arm_data.get('arm', ''),
+                            'N_Analyzed': arm_data.get('n'),
+                            'Mean': arm_data.get('mean'),
+                            'SD': arm_data.get('sd'),
+                            'SE': arm_data.get('se'),
+                            'Median': arm_data.get('median'),
+                            'IQR': arm_data.get('iqr'),
+                            'Events': arm_data.get('events'),
+                            'Total': arm_data.get('total'),
+                            'Percent': arm_data.get('percent'),
+                            # Add between-group comparison (same for all rows)
+                            'Effect_Type': comparison_data.get('effect_measure'),
+                            'Effect_Estimate': comparison_data.get('effect_estimate'),
+                            'CI_95_Lower': comparison_data.get('ci_95_lower'),
+                            'CI_95_Upper': comparison_data.get('ci_95_upper'),
+                            'P_Value': comparison_data.get('p_value')
+                        }
                         outcome_rows.append(row)
                 else:
-                    outcome_rows.append(base_info)
+                    # No arm-specific data, create single row with aggregate data
+                    row = {
+                        'Outcome_Name': outcome.outcome_name,
+                        'Timepoint': timepoint_str,
+                        'Effect_Type': comparison_data.get('effect_measure'),
+                        'Effect_Estimate': comparison_data.get('effect_estimate'),
+                        'CI_95_Lower': comparison_data.get('ci_95_lower'),
+                        'CI_95_Upper': comparison_data.get('ci_95_upper'),
+                        'P_Value': comparison_data.get('p_value')
+                    }
+                    outcome_rows.append(row)
             
             if outcome_rows:
                 pd.DataFrame(outcome_rows).to_excel(writer, sheet_name='Primary Outcomes', index=False)
         
-        # Sheet 5: Secondary Outcomes
+        # Sheet 5: Secondary Outcomes - ONE ROW PER ARM
         secondary_outcomes = [o for o in study.outcomes if o.outcome_type == 'secondary']
         if secondary_outcomes:
             sec_rows = []
+            seen_outcomes = set()  # Track processed outcomes to avoid duplicates
+            
             for outcome in secondary_outcomes:
-                base_info = {
-                    'Outcome_Name': outcome.outcome_name,
-                    'Timepoint': outcome.timepoint
-                }
+                # Skip if outcome name is empty, placeholder, or already processed
+                if not outcome.outcome_name:
+                    continue
+                if outcome.outcome_name.startswith('Potential'):
+                    continue
+                if outcome.outcome_name in seen_outcomes:
+                    continue
+                seen_outcomes.add(outcome.outcome_name)
                 
-                if outcome.effect_estimate:
-                    effect = outcome.effect_estimate
-                    base_info.update({
-                        'Effect_Type': effect.get('effect_measure') or effect.get('type'),
-                        'Effect_Estimate': effect.get('effect_estimate') or effect.get('value'),
-                        'CI_95_Lower': effect.get('ci_95_lower') or effect.get('ci_lower'),
-                        'CI_95_Upper': effect.get('ci_95_upper') or effect.get('ci_upper'),
-                        'P_Value': effect.get('p_value')
-                    })
+                # Get timepoint info
+                timepoint_str = outcome.planned_timepoints or "Not specified"
+                if outcome.timepoints:
+                    primary_tp = next((tp for tp in outcome.timepoints if tp.timepoint_type == 'primary'), outcome.timepoints[0])
+                    timepoint_str = f"{primary_tp.timepoint_value} {primary_tp.timepoint_unit}" if primary_tp else timepoint_str
                 
-                if outcome.results_by_arm:
-                    for arm_result in outcome.results_by_arm:
-                        row = base_info.copy()
-                        row.update({
-                            'Arm': arm_result.get('arm'),
-                            'N': arm_result.get('n'),
-                            'Mean': arm_result.get('mean'),
-                            'SD': arm_result.get('sd'),
-                            'Events': arm_result.get('events'),
-                            'Total': arm_result.get('total')
-                        })
+                # Get arm-by-arm results from additional_data
+                results_by_arm = []
+                if outcome.additional_data:
+                    timepoints_data = outcome.additional_data.get('timepoints', [])
+                    if timepoints_data:
+                        for tp in timepoints_data:
+                            if tp.get('results_by_arm'):
+                                results_by_arm = tp.get('results_by_arm', [])
+                                break
+                    if not results_by_arm:
+                        results_by_arm = outcome.additional_data.get('results_by_arm', [])
+                
+                # Get between-group comparison
+                comparison_data = {}
+                if outcome.additional_data:
+                    timepoints_data = outcome.additional_data.get('timepoints', [])
+                    if timepoints_data:
+                        comparison_data = timepoints_data[0].get('between_group_comparison', {})
+                    if not comparison_data:
+                        comparison_data = outcome.additional_data.get('between_group_comparison', {})
+                
+                # Create row for each arm
+                if results_by_arm:
+                    for arm_data in results_by_arm:
+                        row = {
+                            'Outcome_Name': outcome.outcome_name,
+                            'Timepoint': timepoint_str,
+                            'Arm': arm_data.get('arm', ''),
+                            'N_Analyzed': arm_data.get('n'),
+                            'Mean': arm_data.get('mean'),
+                            'SD': arm_data.get('sd'),
+                            'Events': arm_data.get('events'),
+                            'Total': arm_data.get('total'),
+                            'Effect_Type': comparison_data.get('effect_measure'),
+                            'Effect_Estimate': comparison_data.get('effect_estimate'),
+                            'CI_95_Lower': comparison_data.get('ci_95_lower'),
+                            'CI_95_Upper': comparison_data.get('ci_95_upper'),
+                            'P_Value': comparison_data.get('p_value')
+                        }
                         sec_rows.append(row)
                 else:
-                    sec_rows.append(base_info)
+                    # No arm-specific data
+                    row = {
+                        'Outcome_Name': outcome.outcome_name,
+                        'Timepoint': timepoint_str,
+                        'Effect_Type': comparison_data.get('effect_measure'),
+                        'Effect_Estimate': comparison_data.get('effect_estimate'),
+                        'CI_95_Lower': comparison_data.get('ci_95_lower'),
+                        'CI_95_Upper': comparison_data.get('ci_95_upper'),
+                        'P_Value': comparison_data.get('p_value')
+                    }
+                    sec_rows.append(row)
             
             if sec_rows:
                 pd.DataFrame(sec_rows).to_excel(writer, sheet_name='Secondary Outcomes', index=False)
