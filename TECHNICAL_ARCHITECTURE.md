@@ -1,34 +1,86 @@
-# 🏗️ Clinical Trial Extractor: Technical Architecture & Workflow
+# 🏗️ Clinical Trial Extractor v2.2: Technical Architecture & Implementation
 
 ## 📋 **Table of Contents**
 - [System Overview](#system-overview)
-- [Extraction Pipeline](#extraction-pipeline)
-- [Decision Logic](#decision-logic)
-- [Data Prioritization](#data-prioritization)
-- [Confidence Scoring](#confidence-scoring)
-- [Source Attribution](#source-attribution)
+- [Multi-Source Extraction Pipeline](#multi-source-extraction-pipeline)
+- [Extraction Methods Details](#extraction-methods-details)
+- [Ensemble Decision Logic](#ensemble-decision-logic)
+- [Database Architecture](#database-architecture)
+- [User Control & Source Selection](#user-control--source-selection)
 - [Performance Optimization](#performance-optimization)
-- [Troubleshooting Guide](#troubleshooting-guide)
+- [Bug Fixes & Improvements](#bug-fixes--improvements)
 
 ---
 
 ## 🎯 **System Overview**
 
-The Clinical Trial Extractor v2.1 uses a **5-stage ensemble architecture** that combines multiple extraction methods to achieve 90%+ data extraction confidence. Each method contributes unique strengths:
+The Clinical Trial Extractor v2.2 uses a **multi-source ensemble architecture with user control** that combines 4 extraction methods to achieve maximum data extraction accuracy with complete transparency. Each method runs independently and stores results separately, allowing users to review and select which source to trust for each data point.
 
-- **📝 PDFPlumber**: Clean text extraction (50k-150k chars)
-- **🔍 Tesseract OCR**: Image/scanned content extraction  
-- **📊 Table Detection**: Structured data parsing
-- **🎯 Heuristic Patterns**: Direct regex pattern matching
-- **🤖 GPT-4 LLM**: Intelligent contextual analysis
+### **4 Extraction Methods**
+- **� PDFPlumber** (Confidence: 0.9): Structured table extraction
+- **🔍 Heuristic Patterns** (Confidence: 0.7): Direct regex pattern matching
+- **🤖 GPT-4 LLM** (Confidence: 0.8): Intelligent contextual analysis
+- **�️ Tesseract OCR** (Confidence: 0.6): Image/scanned content extraction
+
+### **Key Improvements in v2.2**
+- **Multi-source storage**: Raw data from each method stored separately
+- **User control**: Review and select preferred sources
+- **Bug fixes**: Delete cascade, CSV deduplication, column size constraints
+- **LLM optimization**: 30% token reduction (22K → 15K tokens)
+- **Enhanced export**: Arm-by-arm results with source attribution
 
 ---
 
-## 🔄 **Extraction Pipeline**
+## 🔄 **Multi-Source Extraction Pipeline**
 
-### **Stage 1: PDF Data Extraction**
-```python
-PDFExtractor.comprehensive_extract()
+### **Complete Flow Diagram**
+```
+PDF Upload
+    ↓
+┌───────────────────────────────────────────┐
+│   PHASE 1: PARALLEL EXTRACTION            │
+├───────────────────────────────────────────┤
+│  📊 PDFPlumber  │  🔍 Heuristic           │
+│  🤖 LLM        │  👁️ OCR                 │
+└───────────────────────────────────────────┘
+    ↓
+┌───────────────────────────────────────────┐
+│   PHASE 2: ENSEMBLE COMBINATION           │
+│   - Merge results intelligently           │
+│   - Fill missing data                     │
+│   - Detect conflicts                      │
+└───────────────────────────────────────────┘
+    ↓
+┌───────────────────────────────────────────┐
+│   PHASE 3: MULTI-SOURCE STORAGE          │
+│   - Studies/Outcomes (final data)         │
+│   - ExtractionSource (raw extractions)    │
+│   - DataElement (field-level attribution) │
+│   - ExtractionConflict (disagreements)    │
+└───────────────────────────────────────────┘
+    ↓
+┌───────────────────────────────────────────┐
+│   PHASE 4: USER REVIEW & SELECTION       │
+│   - View all 4 sources side-by-side       │
+│   - Select preferred source for each field│
+│   - Auto-select based on confidence       │
+│   - Resolve conflicts manually            │
+└───────────────────────────────────────────┘
+    ↓
+┌───────────────────────────────────────────┐
+│   PHASE 5: EXPORT GENERATION             │
+│   - Excel with arm-by-arm results         │
+│   - Deduplication & filtering             │
+│   - Source citations included             │
+│   - Meta-analysis ready format            │
+└───────────────────────────────────────────┘
+```
+
+---
+
+## 📊 **Extraction Methods Details**
+
+### **Method 1: PDFPlumber (Table Extraction)**
 ├── PDFPlumber text extraction
 │   ├── Clean text content (50k-150k characters)
 │   ├── Page-by-page mapping
